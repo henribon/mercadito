@@ -1,0 +1,134 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Paleta: neutros quentes + um unico verde de acento.
+   Trocamos so as variaveis no modo escuro; os utilitarios do Tailwind
+   apontam para elas via @theme inline.
+   --------------------------------------------------------------------------- */
+:root {
+  --bg: #fbfbfa;
+  --surface: #ffffff;
+  --surface-2: #f4f4f2;
+  --text: #191918;
+  --muted: #6f6f6b;
+  --border: #e6e6e2;
+  --accent: #1f7a4d;
+  --accent-soft: #e8f3ec;
+  --danger: #b4322a;
+  --warn: #9a6414;
+  --warn-soft: #fbf1e0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121211;
+    --surface: #1a1a19;
+    --surface-2: #242422;
+    --text: #ededea;
+    --muted: #9b9b95;
+    --border: #2d2d2a;
+    --accent: #4ea87a;
+    --accent-soft: #17281f;
+    --danger: #e0685e;
+    --warn: #d3a05a;
+    --warn-soft: #2a2317;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  /* evita zoom acidental no iOS ao tocar num input */
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Nao queremos o "puxa para atualizar" do Chrome atrapalhando a lista. */
+html {
+  overscroll-behavior-y: none;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* Foco visivel e consistente, sem o anel azul padrao do navegador. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Inputs com 16px evitam o zoom automatico do Safari mobile. */
+input,
+textarea,
+select {
+  font-size: 16px;
+}
+
+/* No Tailwind v4, @utility cria utilitarios de verdade — o que permite
+   compo-los com @apply nas variantes abaixo. */
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 h-11
+         text-sm font-medium transition-colors select-none
+         disabled:opacity-40 disabled:pointer-events-none;
+}
+
+@layer components {
+  .card {
+    @apply bg-surface border border-border rounded-xl;
+  }
+
+  .btn-primary {
+    @apply btn bg-accent text-white hover:opacity-90 active:opacity-80;
+  }
+
+  .btn-ghost {
+    @apply btn border border-border text-text hover:bg-surface-2;
+  }
+
+  .btn-quiet {
+    @apply btn text-muted hover:text-text hover:bg-surface-2;
+  }
+
+  .field {
+    @apply w-full h-11 px-3 rounded-lg bg-surface border border-border
+           text-text placeholder:text-muted
+           focus:border-accent focus:outline-none;
+  }
+
+  .label {
+    @apply block text-xs font-medium text-muted mb-1.5;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5
+           text-[11px] font-medium leading-5;
+  }
+}
+
+/* Safe areas do iPhone: a barra de navegacao nao pode ficar sob o home bar. */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
