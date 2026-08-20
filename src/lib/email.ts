@@ -11,25 +11,43 @@ import nodemailer from "nodemailer";
  * Sem SMTP configurado o link vai para o console, o que permite testar o app
  * inteiro antes de mexer com e-mail.
  */
-function createTransport() {
+/**
+ * O transporte e criado uma vez e reaproveitado: abrir conexao TLS com o Gmail
+ * do zero custa varios segundos, e pagar isso a cada login deixaria a funcao
+ * perigosamente perto do tempo limite da Vercel. `undefined` = ainda nao
+ * resolvido; `null` = sem SMTP configurado.
+ */
+let cachedTransport: nodemailer.Transporter | null | undefined;
+
+function getTransport() {
+  if (cachedTransport !== undefined) return cachedTransport;
+
   const host = process.env.SMTP_HOST;
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
 
-  if (!host || !user || !pass) return null;
+  if (!host || !user || !pass) {
+    cachedTransport = null;
+    return cachedTransport;
+  }
 
   const port = Number(process.env.SMTP_PORT ?? 465);
 
-  return nodemailer.createTransport({
+  cachedTransport = nodemailer.createTransport({
     host,
     port,
     secure: port === 465,
     auth: { user, pass },
+    // Mantem a conexao viva entre envios na mesma instancia.
+    pool: true,
+    maxConnections: 1,
   });
+
+  return cachedTransport;
 }
 
 export async function sendMagicLinkEmail(email: string, url: string): Promise<void> {
-  const transport = createTransport();
+  const transport = getTransport();
 
   if (!transport) {
     console.warn(
