@@ -35,6 +35,48 @@ const MISSING_DATABASE_URL =
   "connection string do Neon (a versão *pooled*, com '-pooler' no host).";
 
 /**
+ * SSL e obrigatorio no Neon, mas atrapalha num Postgres local. Decidir pelo
+ * host e mais previsivel do que depender de como cada versao do driver
+ * interpreta o `sslmode` da connection string.
+ *
+ * `rejectUnauthorized: true` porque o Neon usa uma CA publica de verdade —
+ * desligar a verificacao seria abrir espaco para man-in-the-middle sem ganho.
+ */
+export function sslOptionsFor(url: string | undefined) {
+  if (!url) return undefined;
+
+  let host = "";
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+
+  const isLocal =
+    host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "";
+
+  return isLocal ? undefined : { rejectUnauthorized: true };
+}
+
+/**
+ * A string do Neon vem com `sslmode=require&channel_binding=require`. Como o SSL
+ * e definido acima de forma explicita, esses parametros so serviriam para o
+ * driver imprimir um aviso de depreciacao a cada inicializacao.
+ */
+export function stripSslParams(url: string | undefined): string | undefined {
+  if (!url) return url;
+
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.delete("sslmode");
+    parsed.searchParams.delete("channel_binding");
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+/**
  * O `next build` importa este modulo sem as variaveis de ambiente. Por isso o
  * pool e criado mesmo sem URL e o erro so aparece na primeira consulta — assim
  * o build passa e quem esquecer o .env.local recebe uma mensagem util em vez de
@@ -42,7 +84,9 @@ const MISSING_DATABASE_URL =
  */
 function createPool(): Pool {
   return new Pool({
-    connectionString: connectionString ?? "postgresql://localhost:5432/inexistente",
+    connectionString:
+      stripSslParams(connectionString) ?? "postgresql://localhost:5432/inexistente",
+    ssl: sslOptionsFor(connectionString),
     // O Neon hiberna a instancia; poucos sockets e ocioso curto evitam segurar
     // conexao morta depois que ela acorda. O teto e configuravel porque o free
     // tier limita conexoes simultaneas.

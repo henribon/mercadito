@@ -61,8 +61,15 @@ Primeiro as tabelas de autenticação (`user`, `session`, `account`, `verificati
 npx auth@latest migrate
 ```
 
-Depois cole o conteúdo de [`neon/schema.sql`](neon/schema.sql) no **SQL Editor**
-do console do Neon e execute.
+Depois o schema da aplicação:
+
+```bash
+npm run db:setup
+```
+
+O `db:setup` aplica [`neon/schema.sql`](neon/schema.sql), confere que as tabelas
+de autenticação já existem e lista o que criou. É idempotente — pode rodar de
+novo depois de alterar o schema.
 
 ## 4. Rodar
 
@@ -98,8 +105,29 @@ SMTP_FROM=voce@gmail.com
 
 1. Suba o projeto para um repositório no GitHub.
 2. Na Vercel, **Add New → Project** e importe o repositório.
-3. Copie as variáveis do `.env.local`, trocando `BETTER_AUTH_URL` e
-   `NEXT_PUBLIC_SITE_URL` pela URL final (`https://SEU-APP.vercel.app`).
+3. Em **Settings → Environment Variables**, recrie as variáveis do `.env.local`,
+   trocando `BETTER_AUTH_URL` e `NEXT_PUBLIC_SITE_URL` pela URL final
+   (`https://SEU-APP.vercel.app`). Se ficarem em `localhost`, o link de acesso
+   enviado por e-mail aponta para a máquina de quem clicou e o login quebra.
+
+Depois disso é só `git push`: a Vercel builda e publica sozinha.
+
+> **Onde as variáveis vivem.** São três lugares com propósitos diferentes:
+> `.env.local` (sua máquina, nunca commitado), **Vercel → Environment Variables**
+> (produção) e **GitHub → Secrets** (apenas GitHub Actions). A Vercel puxa o
+> *código* do GitHub, mas nunca lê os Secrets dele — colocar o `DATABASE_URL` lá
+> só exporia a senha do banco sem ter efeito nenhum.
+
+### Por que não GitHub Pages
+
+O GitHub Pages serve arquivos estáticos, sem execução no servidor, e este app
+precisa de servidor por dois motivos independentes:
+
+- O portal da SEFAZ **não envia cabeçalho CORS**, então nenhuma página no
+  navegador consegue ler a nota fiscal — a consulta tem que sair de um servidor
+  (é o que a rota [`/api/nfce`](src/app/api/nfce/route.ts) faz).
+- As credenciais do Postgres nunca podem ir para o navegador; por isso todo
+  acesso a dados passa por Server Actions.
 
 ## 7. Instalar no celular
 
@@ -226,5 +254,6 @@ src/
     normalize.ts          Normalização e similaridade de nomes de produto
     data.ts               Regras puras: recorrência e sugestões
 neon/schema.sql           Tabelas, índices e a view de estatísticas
+scripts/db-setup.mjs      Aplica o schema no banco (npm run db:setup)
 tests/                    Parser, normalização e banco (PGlite)
 ```
