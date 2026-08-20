@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 import { useApp } from "./AppProvider";
 import { IconPlus, IconSpinner } from "./Icons";
-import { addProductToList, addToList } from "@/lib/data";
+import { addItemByName, addProductToList } from "@/lib/actions";
 import { relativeDays, money } from "@/lib/format";
 import { normalizeName, similarity } from "@/lib/normalize";
 
@@ -14,7 +14,7 @@ import { normalizeName, similarity } from "@/lib/normalize";
  * mesmo produto em vez de criar "leite", "Leite" e "leite integral".
  */
 export function AddItemForm() {
-  const { supabase, household, user, products, pending, refresh } = useApp();
+  const { products, pending, refresh } = useApp();
 
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -40,7 +40,7 @@ export function AddItemForm() {
       .slice(0, 5);
   }, [text, products, pendingIds]);
 
-  /** Nome digitado ja existe exatamente? Entao nao oferecemos "criar". */
+  /** Nome digitado ja existe exatamente? Entao nao criamos outro produto. */
   const exactMatch = useMemo(() => {
     const norm = normalizeName(text);
     if (!norm) return null;
@@ -51,16 +51,16 @@ export function AddItemForm() {
     event.preventDefault();
 
     const name = text.trim();
-    if (!name || !household || !user) return;
+    if (!name) return;
 
     setBusy(true);
     setError(null);
 
     try {
       if (exactMatch) {
-        await addProductToList(supabase, household.id, user.id, exactMatch.id);
+        await addProductToList(exactMatch.id);
       } else {
-        await addToList(supabase, household.id, user.id, name);
+        await addItemByName(name);
       }
       setText("");
       await refresh();
@@ -72,13 +72,11 @@ export function AddItemForm() {
   }
 
   async function addExisting(productId: string) {
-    if (!household || !user) return;
-
     setBusy(true);
     setError(null);
 
     try {
-      await addProductToList(supabase, household.id, user.id, productId);
+      await addProductToList(productId);
       setText("");
       await refresh();
     } catch (cause) {

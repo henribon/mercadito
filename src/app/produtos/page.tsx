@@ -10,13 +10,9 @@ import {
   IconSpinner,
   IconTrash,
 } from "@/components/Icons";
-import {
-  addProductToList,
-  deleteProduct,
-  expectedInterval,
-  suggestedRecurrenceDays,
-  updateProduct,
-} from "@/lib/data";
+import { addProductToList, deleteProduct, updateProduct } from "@/lib/actions";
+import { authClient } from "@/lib/auth-client";
+import { expectedInterval, suggestedRecurrenceDays } from "@/lib/data";
 import { everyDays, money, relativeDays } from "@/lib/format";
 import { normalizeName } from "@/lib/normalize";
 import type { ProductWithStats } from "@/lib/types";
@@ -147,16 +143,16 @@ function ProductRow({
   onToggle: () => void;
   inList: boolean;
 }) {
-  const { supabase, household, user, refresh } = useApp();
+  const { refresh } = useApp();
   const [busy, setBusy] = useState(false);
 
   const stats = product.stats;
   const interval = expectedInterval(product);
 
-  async function patch(changes: Parameters<typeof updateProduct>[2]) {
+  async function patch(changes: Parameters<typeof updateProduct>[1]) {
     setBusy(true);
     try {
-      await updateProduct(supabase, product.id, changes);
+      await updateProduct(product.id, changes);
       await refresh();
     } finally {
       setBusy(false);
@@ -164,10 +160,9 @@ function ProductRow({
   }
 
   async function handleAddToList() {
-    if (!household || !user) return;
     setBusy(true);
     try {
-      await addProductToList(supabase, household.id, user.id, product.id);
+      await addProductToList(product.id);
       await refresh();
     } finally {
       setBusy(false);
@@ -180,7 +175,7 @@ function ProductRow({
     }
     setBusy(true);
     try {
-      await deleteProduct(supabase, product.id);
+      await deleteProduct(product.id);
       await refresh();
     } finally {
       setBusy(false);
@@ -351,7 +346,7 @@ function Stat({ label, value }: { label: string; value: string }) {
 /* -------------------------------------------------------------------------- */
 
 function CasaCard() {
-  const { supabase, household, user } = useApp();
+  const { household, user } = useApp();
   const [copied, setCopied] = useState(false);
 
   if (!household) return null;
@@ -396,7 +391,7 @@ function CasaCard() {
           <button
             type="button"
             onClick={async () => {
-              await supabase.auth.signOut();
+              await authClient.signOut();
               window.location.href = "/login";
             }}
             className="shrink-0 text-xs text-muted underline underline-offset-2 hover:text-text"

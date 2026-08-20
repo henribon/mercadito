@@ -1,66 +1,45 @@
-import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC_PATHS = ["/login", "/auth"];
-
-type CookieToSet = { name: string; value: string; options: CookieOptions };
+const PUBLIC_PATHS = ["/login"];
 
 /**
- * Renova a sessao a cada request e protege as rotas do app.
- * Sem isso o magic link expira e o usuario cai numa tela em branco.
+ * Portao otimista.
+ *
+ * O middleware roda no Edge, onde nao ha conexao com o Postgres — entao aqui so
+ * conferimos a presenca do cookie de sessao, sem validar a assinatura. A
+ * verificacao de verdade acontece em cada Server Action, via
+ * `requireMembership()`, que e onde os dados realmente saem do banco.
+ *
+ * O helper getSessionCookie do Better Auth tem bugs conhecidos no Edge, por
+ * isso lemos o cookie direto.
  */
-export async function middleware(request: NextRequest) {
-  let response = NextResponse.next({ request });
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet: CookieToSet[]) {
-          for (const { name, value } of cookiesToSet) {
-            request.cookies.set(name, value);
-          }
-          response = NextResponse.next({ request });
-          for (const { name, value, options } of cookiesToSet) {
-            response.cookies.set(name, value, options);
-          }
-        },
-      },
-    },
+function hasSessionCookie(request: NextRequest): boolean {
+  return (
+    request.cookies.has("better-auth.session_token") ||
+    request.cookies.has("__Secure-better-auth.session_token")
   );
+}
 
-  // Se o Supabase estiver fora do ar, tratamos como deslogado em vez de
-  // derrubar o app inteiro com um 500.
-  let user = null;
-  try {
-    const { data } = await supabase.auth.getUser();
-    user = data.user;
-  } catch {
-    user = null;
-  }
-
+export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isPublic = PUBLIC_PATHS.some((path) => pathname.startsWith(path));
+  const signedIn = hasSessionCookie(request);
 
-  if (!user && !isPublic) {
+  if (!signedIn && !isPublic) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("next", pathname);
     return NextResponse.redirect(url);
   }
 
-  if (user && pathname === "/login") {
+  if (signedIn && pathname === "/login") {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     url.search = "";
     return NextResponse.redirect(url);
   }
 
-  return response;
+  return NextResponse.next();
 }
 
 export const config = {

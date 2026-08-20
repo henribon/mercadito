@@ -1,8 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { createClient } from "@/lib/supabase/server";
 import { detectSefazError, parseNfceHtml } from "@/lib/nfce/parse";
 import { parseQrContent } from "@/lib/nfce/qr";
+import { currentUser } from "@/lib/session";
 
 // cheerio precisa do runtime Node; e a consulta e sempre ao vivo.
 export const runtime = "nodejs";
@@ -18,10 +18,7 @@ const TIMEOUT_MS = 20_000;
  */
 export async function POST(request: NextRequest) {
   // Rota autenticada: nao queremos um proxy aberto para a internet.
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await currentUser();
 
   if (!user) {
     return NextResponse.json({ error: "Não autenticado." }, { status: 401 });

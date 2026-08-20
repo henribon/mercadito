@@ -102,3 +102,28 @@ export type Suggestion = {
   /** Intervalo considerado (manual ou media do historico). */
   intervalDays: number;
 };
+
+/** Usuario da sessao, na forma que a UI consome. */
+export type AppUser = {
+  id: string;
+  email: string;
+  name: string | null;
+};
+
+/** Estado completo da aplicacao, carregado numa unica ida ao banco. */
+export type AppSnapshot = {
+  user: AppUser | null;
+  household: Household | null;
+  products: ProductWithStats[];
+  pending: ListItemWithProduct[];
+};
+
+/** Linha da tela de historico: compra com a contagem de itens ja agregada. */
+export type PurchaseSummary = {
+  id: string;
+  store_name: string | null;
+  purchased_at: string;
+  paid_amount: number | null;
+  total_amount: number | null;
+  item_count: number;
+};

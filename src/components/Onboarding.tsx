@@ -4,13 +4,14 @@ import { useState } from "react";
 
 import { useApp } from "./AppProvider";
 import { IconSpinner } from "./Icons";
+import { createHousehold, joinHousehold } from "@/lib/actions";
 
 /**
  * Primeiro acesso: um cria a casa, o outro entra com o codigo de convite.
  * E o unico passo de configuracao do app inteiro.
  */
 export function Onboarding() {
-  const { supabase, user, refresh } = useApp();
+  const { user, refresh } = useApp();
 
   const [mode, setMode] = useState<"create" | "join">("create");
   const [houseName, setHouseName] = useState("Nossa casa");
@@ -24,31 +25,20 @@ export function Onboarding() {
     setBusy(true);
     setError(null);
 
-    const name = displayName.trim() || user?.email?.split("@")[0] || null;
+    const name = displayName.trim() || user?.email?.split("@")[0] || undefined;
 
-    const { error: rpcError } =
-      mode === "create"
-        ? await supabase.rpc("create_household", {
-            p_name: houseName.trim(),
-            p_display_name: name,
-          })
-        : await supabase.rpc("join_household", {
-            p_code: inviteCode.trim().toUpperCase(),
-            p_display_name: name,
-          });
-
-    if (rpcError) {
-      setError(
-        rpcError.message.includes("convite")
-          ? "Código de convite inválido. Confira com quem criou a casa."
-          : rpcError.message,
-      );
+    try {
+      if (mode === "create") {
+        await createHousehold(houseName.trim(), name);
+      } else {
+        await joinHousehold(inviteCode.trim().toUpperCase(), name);
+      }
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Não consegui concluir.");
+    } finally {
       setBusy(false);
-      return;
     }
-
-    await refresh();
-    setBusy(false);
   }
 
   return (

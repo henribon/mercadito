@@ -5,21 +5,14 @@ import { useEffect, useMemo, useState } from "react";
 
 import { useApp } from "@/components/AppProvider";
 import { IconChevronRight, IconSpinner } from "@/components/Icons";
+import { listPurchases } from "@/lib/actions";
 import { date, money } from "@/lib/format";
-
-type PurchaseRow = {
-  id: string;
-  store_name: string | null;
-  purchased_at: string;
-  paid_amount: number | null;
-  total_amount: number | null;
-  purchase_items: { count: number }[];
-};
+import type { PurchaseSummary } from "@/lib/types";
 
 export default function HistoricoPage() {
-  const { supabase, household } = useApp();
+  const { household } = useApp();
 
-  const [purchases, setPurchases] = useState<PurchaseRow[] | null>(null);
+  const [purchases, setPurchases] = useState<PurchaseSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -27,22 +20,19 @@ export default function HistoricoPage() {
 
     let cancelled = false;
 
-    supabase
-      .from("purchases")
-      .select("id, store_name, purchased_at, paid_amount, total_amount, purchase_items(count)")
-      .eq("household_id", household.id)
-      .order("purchased_at", { ascending: false })
-      .limit(100)
-      .then(({ data, error: queryError }) => {
+    listPurchases()
+      .then((rows) => {
+        if (!cancelled) setPurchases(rows);
+      })
+      .catch((cause: unknown) => {
         if (cancelled) return;
-        if (queryError) setError(queryError.message);
-        else setPurchases((data ?? []) as unknown as PurchaseRow[]);
+        setError(cause instanceof Error ? cause.message : "Falha ao carregar.");
       });
 
     return () => {
       cancelled = true;
     };
-  }, [supabase, household]);
+  }, [household]);
 
   /** Total gasto no mês corrente: o número que interessa no dia a dia. */
   const monthTotal = useMemo(() => {
@@ -71,9 +61,7 @@ export default function HistoricoPage() {
       <header className="mb-4">
         <h1 className="text-xl font-semibold tracking-tight">Histórico</h1>
         {monthTotal !== null && (
-          <p className="text-sm text-muted">
-            {money(monthTotal)} neste mês
-          </p>
+          <p className="text-sm text-muted">{money(monthTotal)} neste mês</p>
         )}
       </header>
 
@@ -98,12 +86,9 @@ export default function HistoricoPage() {
                 className="flex items-center gap-3 px-4 py-3 hover:bg-surface-2"
               >
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm">
-                    {purchase.store_name ?? "Compra"}
-                  </p>
+                  <p className="truncate text-sm">{purchase.store_name ?? "Compra"}</p>
                   <p className="text-xs text-muted">
-                    {date(purchase.purchased_at)} ·{" "}
-                    {purchase.purchase_items[0]?.count ?? 0} itens
+                    {date(purchase.purchased_at)} · {purchase.item_count} itens
                   </p>
                 </div>
                 <span className="shrink-0 text-sm font-medium">

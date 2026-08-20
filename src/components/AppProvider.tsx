@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import {
   createContext,
   useCallback,
@@ -9,31 +10,28 @@ import {
   useRef,
   useState,
 } from "react";
-import type { SupabaseClient, User } from "@supabase/supabase-js";
 
-import { createClient } from "@/lib/supabase/client";
-import {
-  buildSuggestions,
-  fetchHousehold,
-  fetchPendingItems,
-  fetchProducts,
-} from "@/lib/data";
+import { loadSnapshot } from "@/lib/actions";
+import { buildSuggestions } from "@/lib/data";
 import type {
+  AppUser,
   Household,
   ListItemWithProduct,
   ProductWithStats,
   Suggestion,
 } from "@/lib/types";
 
+/** De quanto em quanto tempo buscamos mudancas feitas pelo outro celular. */
+const POLL_INTERVAL_MS = 15_000;
+
 type AppState = {
   loading: boolean;
   error: string | null;
-  user: User | null;
+  user: AppUser | null;
   household: Household | null;
   products: ProductWithStats[];
   pending: ListItemWithProduct[];
   suggestions: Suggestion[];
-  supabase: SupabaseClient;
   refresh: () => Promise<void>;
 };
 
@@ -46,118 +44,96 @@ export function useApp(): AppState {
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  // O cliente precisa ser estavel entre renders para o realtime nao reconectar.
-  const [supabase] = useState(() => createClient());
+  const router = useRouter();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [household, setHousehold] = useState<Household | null>(null);
   const [products, setProducts] = useState<ProductWithStats[]>([]);
   const [pending, setPending] = useState<ListItemWithProduct[]>([]);
 
-  // Evita corrida entre um refresh manual e outro disparado pelo realtime.
-  const refreshToken = useRef(0);
+  // Descarta respostas fora de ordem: um poll lento nao pode sobrescrever o
+  // resultado de um refresh disparado depois dele.
+  const requestId = useRef(0);
 
-  const load = useCallback(async () => {
-    const token = ++refreshToken.current;
+  const refresh = useCallback(async () => {
+    const token = ++requestId.current;
 
     try {
-      const {
-        data: { user: currentUser },
-      } = await supabase.auth.getUser();
+      const snapshot = await loadSnapshot();
+      if (token !== requestId.current) return;
 
-      if (token !== refreshToken.current) return;
-      setUser(currentUser);
-
-      if (!currentUser) {
-        setHousehold(null);
-        setProducts([]);
-        setPending([]);
-        return;
-      }
-
-      const currentHousehold = await fetchHousehold(supabase);
-      if (token !== refreshToken.current) return;
-      setHousehold(currentHousehold);
-
-      if (!currentHousehold) {
-        setProducts([]);
-        setPending([]);
-        return;
-      }
-
-      const nextProducts = await fetchProducts(supabase, currentHousehold.id);
-      const nextPending = await fetchPendingItems(
-        supabase,
-        currentHousehold.id,
-        nextProducts,
-      );
-
-      if (token !== refreshToken.current) return;
-      setProducts(nextProducts);
-      setPending(nextPending);
+      setUser(snapshot.user);
+      setHousehold(snapshot.household);
+      setProducts(snapshot.products);
+      setPending(snapshot.pending);
       setError(null);
     } catch (cause) {
-      if (token !== refreshToken.current) return;
-      setError(cause instanceof Error ? cause.message : "Falha ao carregar os dados.");
+      if (token !== requestId.current) return;
+
+      const message =
+        cause instanceof Error ? cause.message : "Falha ao carregar os dados.";
+
+      // Sessao expirou enquanto o app estava aberto.
+      if (message.includes("Não autenticado")) {
+        router.replace("/login");
+        return;
+      }
+      setError(message);
     } finally {
-      if (token === refreshToken.current) setLoading(false);
+      if (token === requestId.current) setLoading(false);
     }
-  }, [supabase]);
+  }, [router]);
 
   useEffect(() => {
-    void load();
+    void refresh();
+  }, [refresh]);
 
-    const { data: authListener } = supabase.auth.onAuthStateChange(() => {
-      void load();
-    });
-
-    return () => authListener.subscription.unsubscribe();
-  }, [load, supabase]);
-
-  // Realtime: qualquer mudanca feita pelo outro celular recarrega o estado.
+  /**
+   * Sincronizacao entre os dois celulares.
+   *
+   * Sem realtime, buscamos periodicamente — mas so com a aba visivel, e sempre
+   * ao voltar para ela. Na pratica cobre o caso real (um marca um item no
+   * mercado, o outro ve em segundos) sem manter conexao aberta nem gastar
+   * bateria com a tela apagada.
+   */
   useEffect(() => {
     if (!household) return;
 
-    const channel = supabase
-      .channel(`casa:${household.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "list_items",
-          filter: `household_id=eq.${household.id}`,
-        },
-        () => void load(),
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "products",
-          filter: `household_id=eq.${household.id}`,
-        },
-        () => void load(),
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "purchases",
-          filter: `household_id=eq.${household.id}`,
-        },
-        () => void load(),
-      )
-      .subscribe();
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const start = () => {
+      if (timer !== null) return;
+      timer = setInterval(() => void refresh(), POLL_INTERVAL_MS);
+    };
+
+    const stop = () => {
+      if (timer === null) return;
+      clearInterval(timer);
+      timer = null;
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void refresh();
+        start();
+      } else {
+        stop();
+      }
+    };
+
+    if (document.visibilityState === "visible") start();
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onVisibility);
 
     return () => {
-      void supabase.removeChannel(channel);
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onVisibility);
     };
-  }, [household, load, supabase]);
+  }, [household, refresh]);
 
   const suggestions = useMemo(() => {
     const pendingIds = new Set(pending.map((item) => item.product_id));
@@ -173,10 +149,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       products,
       pending,
       suggestions,
-      supabase,
-      refresh: load,
+      refresh,
     }),
-    [loading, error, user, household, products, pending, suggestions, supabase, load],
+    [loading, error, user, household, products, pending, suggestions, refresh],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

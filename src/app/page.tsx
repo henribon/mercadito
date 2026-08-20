@@ -12,7 +12,7 @@ import {
   IconSpinner,
   IconTrash,
 } from "@/components/Icons";
-import { addProductToList, markBought, removeListItem } from "@/lib/data";
+import { addProductToList, markBought, removeListItem } from "@/lib/actions";
 import { money, quantity, relativeDays } from "@/lib/format";
 import type { ListItemWithProduct, Suggestion } from "@/lib/types";
 
@@ -74,7 +74,7 @@ export default function ListaPage() {
 /* -------------------------------------------------------------------------- */
 
 function PendingRow({ item }: { item: ListItemWithProduct }) {
-  const { supabase, refresh } = useApp();
+  const { refresh } = useApp();
   const [busy, setBusy] = useState<"buy" | "remove" | null>(null);
 
   const lastPurchase = item.product?.stats?.last_purchased_at ?? null;
@@ -83,7 +83,7 @@ function PendingRow({ item }: { item: ListItemWithProduct }) {
   async function handleBought() {
     setBusy("buy");
     try {
-      await markBought(supabase, item.id);
+      await markBought(item.id);
       await refresh();
     } finally {
       setBusy(null);
@@ -93,7 +93,7 @@ function PendingRow({ item }: { item: ListItemWithProduct }) {
   async function handleRemove() {
     setBusy("remove");
     try {
-      await removeListItem(supabase, item.id);
+      await removeListItem(item.id);
       await refresh();
     } finally {
       setBusy(null);
@@ -165,17 +165,16 @@ function SuggestionsSection({ suggestions }: { suggestions: Suggestion[] }) {
 }
 
 function SuggestionRow({ suggestion }: { suggestion: Suggestion }) {
-  const { supabase, household, user, refresh } = useApp();
+  const { refresh } = useApp();
   const [busy, setBusy] = useState(false);
 
   const { product, reason, daysSince, intervalDays } = suggestion;
   const overdue = reason === "overdue";
 
   async function handleAdd() {
-    if (!household || !user) return;
     setBusy(true);
     try {
-      await addProductToList(supabase, household.id, user.id, product.id);
+      await addProductToList(product.id);
       await refresh();
     } finally {
       setBusy(false);

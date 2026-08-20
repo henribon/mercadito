@@ -6,49 +6,43 @@ import { useEffect, useState } from "react";
 
 import { useApp } from "@/components/AppProvider";
 import { IconChevronLeft, IconSpinner } from "@/components/Icons";
-import { fetchPurchaseItems } from "@/lib/data";
+import { getPurchase } from "@/lib/actions";
 import { dateTime, money, quantity } from "@/lib/format";
 import type { Purchase, PurchaseItem } from "@/lib/types";
 
 export default function CompraPage() {
   const params = useParams<{ id: string }>();
-  const { supabase, household, products } = useApp();
+  const { household, products } = useApp();
 
   const [purchase, setPurchase] = useState<Purchase | null>(null);
   const [items, setItems] = useState<PurchaseItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!household || !params?.id) return;
+    const id = params?.id;
+    if (!household || !id) return;
 
     let cancelled = false;
 
-    async function load() {
-      try {
-        const { data, error: queryError } = await supabase
-          .from("purchases")
-          .select("*")
-          .eq("id", params.id)
-          .single();
-
-        if (queryError) throw queryError;
+    getPurchase(id)
+      .then((result) => {
         if (cancelled) return;
-        setPurchase(data as Purchase);
-
-        const purchaseItems = await fetchPurchaseItems(supabase, params.id);
+        if (!result) {
+          setError("Compra não encontrada.");
+          return;
+        }
+        setPurchase(result.purchase);
+        setItems(result.items);
+      })
+      .catch((cause: unknown) => {
         if (cancelled) return;
-        setItems(purchaseItems);
-      } catch (cause) {
-        if (cancelled) return;
-        setError(cause instanceof Error ? cause.message : "Compra não encontrada.");
-      }
-    }
+        setError(cause instanceof Error ? cause.message : "Falha ao carregar.");
+      });
 
-    void load();
     return () => {
       cancelled = true;
     };
-  }, [supabase, household, params?.id]);
+  }, [household, params?.id]);
 
   const productNames = new Map(products.map((product) => [product.id, product.name]));
 

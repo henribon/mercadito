@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { createClient } from "@/lib/supabase/client";
+import { authClient } from "@/lib/auth-client";
 import { IconSpinner } from "@/components/Icons";
 
 export default function LoginPage() {
@@ -10,14 +10,18 @@ export default function LoginPage() {
   const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [message, setMessage] = useState("");
 
-  // O callback devolve `?erro=` quando o link expira; sem isso o usuario so
-  // veria o formulario de novo, sem entender o que aconteceu.
-  // Lido do window para nao precisar de Suspense em volta de useSearchParams.
+  // O Better Auth redireciona para cá com `?error=` quando o link expira; sem
+  // isso o usuário só veria o formulário de novo, sem entender o que aconteceu.
   useEffect(() => {
-    const erro = new URLSearchParams(window.location.search).get("erro");
-    if (erro) {
+    const params = new URLSearchParams(window.location.search);
+    const failure = params.get("error") ?? params.get("erro");
+    if (failure) {
       setStatus("error");
-      setMessage(erro);
+      setMessage(
+        failure === "INVALID_TOKEN" || failure === "invalid_token"
+          ? "Esse link já foi usado ou expirou. Peça um novo."
+          : failure,
+      );
     }
   }, []);
 
@@ -27,22 +31,18 @@ export default function LoginPage() {
 
     setStatus("sending");
 
-    const supabase = createClient();
-    const siteUrl =
-      process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ?? window.location.origin;
-
-    // Volta para a pagina que o usuario tentou abrir antes de ser barrado.
+    // Volta para a página que o usuário tentou abrir antes de ser barrado.
     const next = new URLSearchParams(window.location.search).get("next") ?? "/";
-    const redirect = `${siteUrl}/auth/callback?next=${encodeURIComponent(next)}`;
 
-    const { error } = await supabase.auth.signInWithOtp({
+    const { error } = await authClient.signIn.magicLink({
       email: email.trim(),
-      options: { emailRedirectTo: redirect },
+      callbackURL: next,
+      errorCallbackURL: "/login",
     });
 
     if (error) {
       setStatus("error");
-      setMessage(error.message);
+      setMessage(error.message ?? "Não consegui enviar o link. Tente de novo.");
       return;
     }
 
@@ -63,7 +63,7 @@ export default function LoginPage() {
           <h2 className="text-base font-medium">Link enviado</h2>
           <p className="mt-2 text-sm text-muted">
             Abra o e-mail que mandamos para <strong className="text-text">{email}</strong> e
-            toque no link para entrar. Pode fechar esta aba.
+            toque no link para entrar. Ele vale por 15 minutos.
           </p>
           <button
             type="button"

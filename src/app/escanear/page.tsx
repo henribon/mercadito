@@ -12,7 +12,8 @@ import {
   IconChevronRight,
   IconSpinner,
 } from "@/components/Icons";
-import { fetchAliases, importPurchase, type ItemResolution } from "@/lib/data";
+import { getAliases, importPurchase } from "@/lib/actions";
+import type { ItemResolution } from "@/lib/data";
 import { money, quantity, dateTime } from "@/lib/format";
 import { normalizeName, rankMatches, suggestProductName } from "@/lib/normalize";
 import type { NfceReceipt } from "@/lib/nfce/parse";
@@ -26,7 +27,7 @@ type Done = { itemsSaved: number; listItemsCleared: number; purchaseId: string }
 const AUTO_LINK_THRESHOLD = 0.72;
 
 export default function EscanearPage() {
-  const { supabase, household, user, products, refresh } = useApp();
+  const { household, products, refresh } = useApp();
 
   const [mode, setMode] = useState<Mode>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -37,12 +38,12 @@ export default function EscanearPage() {
   const [resolutions, setResolutions] = useState<ItemResolution[]>([]);
   const [done, setDone] = useState<Done | null>(null);
 
-  const [aliases, setAliases] = useState<Map<string, string>>(new Map());
+  const [aliases, setAliases] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!household) return;
-    void fetchAliases(supabase, household.id).then(setAliases).catch(() => {});
-  }, [supabase, household]);
+    void getAliases().then(setAliases).catch(() => {});
+  }, [household]);
 
   const consult = useCallback(
     async (qr: string) => {
@@ -77,20 +78,13 @@ export default function EscanearPage() {
   );
 
   async function save() {
-    if (!receipt || !household || !user) return;
+    if (!receipt) return;
 
     setMode("saving");
     setError(null);
 
     try {
-      const result = await importPurchase(
-        supabase,
-        household.id,
-        user.id,
-        receipt,
-        resolutions,
-        sourceUrl,
-      );
+      const result = await importPurchase(receipt, resolutions, sourceUrl);
       setDone(result);
       setMode("done");
       await refresh();
@@ -222,13 +216,13 @@ export default function EscanearPage() {
 function defaultResolutions(
   receipt: NfceReceipt,
   products: ProductWithStats[],
-  aliases: Map<string, string>,
+  aliases: Record<string, string>,
 ): ItemResolution[] {
   const productIds = new Set(products.map((product) => product.id));
 
   return receipt.items.map((item) => {
     // 1. Ja ensinamos esse casamento numa compra anterior.
-    const known = aliases.get(normalizeName(item.description));
+    const known = aliases[normalizeName(item.description)];
     if (known && productIds.has(known)) {
       return { action: "link", productId: known };
     }
