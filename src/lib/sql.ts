@@ -133,3 +133,13 @@ export const INSERT_MEMBER = `
 export const HOUSEHOLD_BY_INVITE_CODE = `
   select * from households where invite_code = $1
 `;
+
+/** $1 = email (comparado sem diferenciar maiusculas) */
+export const USER_BY_EMAIL = `
+  select id from "user" where lower(email) = lower($1) limit 1
+`;
+
+/** Quantas casas existem — zero significa que o app ainda nao foi usado. */
+export const HOUSEHOLD_COUNT = `
+  select count(*)::int as n from households
+`;

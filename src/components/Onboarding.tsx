@@ -1,24 +1,80 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useApp } from "./AppProvider";
 import { IconSpinner } from "./Icons";
-import { createHousehold, joinHousehold } from "@/lib/actions";
+import { anyHouseholdExists, createHousehold, joinHousehold } from "@/lib/actions";
+import { PENDING_CODE_KEY } from "@/lib/auth-shared";
 
 /**
- * Primeiro acesso: um cria a casa, o outro entra com o codigo de convite.
- * E o unico passo de configuracao do app inteiro.
+ * Passo entre entrar no app e ter uma lista.
+ *
+ * Quem chegou com o codigo de acesso ja foi validado no login, entao entramos
+ * na casa automaticamente e essa tela nem aparece. Ela so e mostrada quando o
+ * codigo se perdeu (outro navegador, aba anonima) ou quando e o primeiro acesso
+ * de todos, que e quem cria a casa.
  */
 export function Onboarding() {
   const { user, refresh } = useApp();
 
-  const [mode, setMode] = useState<"create" | "join">("create");
+  const [mode, setMode] = useState<"create" | "join">("join");
   const [houseName, setHouseName] = useState("Nossa casa");
   const [inviteCode, setInviteCode] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /** null enquanto nao sabemos; decide se "criar casa" pode ser oferecido. */
+  const [houseExists, setHouseExists] = useState<boolean | null>(null);
+  const [autoJoining, setAutoJoining] = useState(false);
+
+  // Uma tentativa por montagem: se o codigo guardado for invalido, cai para o
+  // formulario em vez de repetir o mesmo erro em loop.
+  const autoJoinTried = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function start() {
+      const existe = await anyHouseholdExists().catch(() => true);
+      if (cancelled) return;
+
+      setHouseExists(existe);
+      setMode(existe ? "join" : "create");
+
+      if (autoJoinTried.current) return;
+      autoJoinTried.current = true;
+
+      let saved: string | null = null;
+      try {
+        saved = sessionStorage.getItem(PENDING_CODE_KEY);
+      } catch {
+        saved = null;
+      }
+      if (!saved || !existe) return;
+
+      setAutoJoining(true);
+      try {
+        await joinHousehold(saved, user?.email?.split("@")[0]);
+        try {
+          sessionStorage.removeItem(PENDING_CODE_KEY);
+        } catch {
+          // sem sessionStorage: nada a limpar
+        }
+        await refresh();
+      } catch {
+        if (!cancelled) setInviteCode(saved);
+      } finally {
+        if (!cancelled) setAutoJoining(false);
+      }
+    }
+
+    void start();
+    return () => {
+      cancelled = true;
+    };
+  }, [refresh, user]);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -41,35 +97,25 @@ export function Onboarding() {
     }
   }
 
+  if (houseExists === null || autoJoining) {
+    return (
+      <div className="flex flex-col items-center gap-3 py-24 text-muted">
+        <IconSpinner size={22} />
+        {autoJoining && <p className="text-sm">Entrando na casa…</p>}
+      </div>
+    );
+  }
+
   return (
     <div className="py-6">
       <h1 className="text-xl font-semibold tracking-tight">Quase lá</h1>
       <p className="mt-1 text-sm text-muted">
-        A lista fica dentro de uma casa compartilhada. Crie a sua ou entre na que já existe.
+        {houseExists
+          ? "Informe o código de acesso para entrar na lista compartilhada."
+          : "Crie a casa onde a lista de vocês vai ficar."}
       </p>
 
-      <div className="mt-5 flex gap-1 rounded-lg bg-surface-2 p-1">
-        <button
-          type="button"
-          onClick={() => setMode("create")}
-          className={`flex-1 rounded-md py-2 text-sm font-medium transition-colors ${
-            mode === "create" ? "bg-surface text-text shadow-sm" : "text-muted"
-          }`}
-        >
-          Criar casa
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode("join")}
-          className={`flex-1 rounded-md py-2 text-sm font-medium transition-colors ${
-            mode === "join" ? "bg-surface text-text shadow-sm" : "text-muted"
-          }`}
-        >
-          Entrar com código
-        </button>
-      </div>
-
-      <form onSubmit={handleSubmit} className="card mt-4 p-5">
+      <form onSubmit={handleSubmit} className="card mt-5 p-5">
         {mode === "create" ? (
           <>
             <label htmlFor="house" className="label">
@@ -86,7 +132,7 @@ export function Onboarding() {
         ) : (
           <>
             <label htmlFor="code" className="label">
-              Código de convite
+              Código de acesso
             </label>
             <input
               id="code"
@@ -94,6 +140,7 @@ export function Onboarding() {
               onChange={(event) => setInviteCode(event.target.value.toUpperCase())}
               placeholder="A1B2C3"
               autoCapitalize="characters"
+              autoComplete="off"
               className="field font-mono tracking-widest"
               required
             />

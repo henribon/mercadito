@@ -11,6 +11,7 @@ import {
   ADD_PRODUCT_TO_LIST,
   CLEAR_BOUGHT_ITEMS,
   HOUSEHOLD_BY_INVITE_CODE,
+  HOUSEHOLD_COUNT,
   HOUSEHOLD_FOR_USER,
   INSERT_HOUSEHOLD,
   INSERT_MEMBER,
@@ -18,6 +19,7 @@ import {
   PRODUCTS_WITH_STATS,
   PURCHASE_SUMMARIES,
   UPSERT_PRODUCT,
+  USER_BY_EMAIL,
 } from "../src/lib/sql.ts";
 
 /**
@@ -401,5 +403,23 @@ describe("entrar numa casa", () => {
       db.query(INSERT_HOUSEHOLD, ["Clone", "ABC123"]),
       /duplicate key|unique/i,
     );
+  });
+});
+
+describe("portao de acesso", () => {
+  test("USER_BY_EMAIL acha sem diferenciar maiusculas", async () => {
+    const exato = await db.query(USER_BY_EMAIL, ["henri@example.com"]);
+    assert.equal(exato.rows.length, 1);
+
+    const trocado = await db.query(USER_BY_EMAIL, ["HENRI@Example.COM"]);
+    assert.equal(trocado.rows.length, 1, "deveria achar independente da caixa");
+
+    const inexistente = await db.query(USER_BY_EMAIL, ["ninguem@example.com"]);
+    assert.equal(inexistente.rows.length, 0);
+  });
+
+  test("HOUSEHOLD_COUNT conta as casas existentes", async () => {
+    const { rows } = await db.query<{ n: number }>(HOUSEHOLD_COUNT);
+    assert.ok(rows[0].n >= 2, "o seed cria pelo menos duas casas");
   });
 });

@@ -8,6 +8,7 @@ import {
   ALIASES_FOR_HOUSEHOLD,
   CLEAR_BOUGHT_ITEMS,
   HOUSEHOLD_BY_INVITE_CODE,
+  HOUSEHOLD_COUNT,
   INSERT_HOUSEHOLD,
   INSERT_MEMBER,
   PENDING_ITEMS,
@@ -155,6 +156,13 @@ function randomInviteCode(): string {
     code += alphabet[Math.floor(Math.random() * alphabet.length)];
   }
   return code;
+}
+
+/** Ja existe alguma casa? Define se a tela inicial pode oferecer 'criar casa'. */
+export async function anyHouseholdExists(): Promise<boolean> {
+  await requireUser();
+  const counted = await queryOne<{ n: number }>(HOUSEHOLD_COUNT);
+  return (counted?.n ?? 0) > 0;
 }
 
 export async function createHousehold(

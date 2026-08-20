@@ -3,10 +3,12 @@
 import { useEffect, useState } from "react";
 
 import { authClient } from "@/lib/auth-client";
+import { ACCESS_CODE_HEADER, PENDING_CODE_KEY } from "@/lib/auth-shared";
 import { IconSpinner } from "@/components/Icons";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
   const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [message, setMessage] = useState("");
 
@@ -18,7 +20,7 @@ export default function LoginPage() {
     if (failure) {
       setStatus("error");
       setMessage(
-        failure === "INVALID_TOKEN" || failure === "invalid_token"
+        /INVALID_TOKEN/i.test(failure)
           ? "Esse link já foi usado ou expirou. Peça um novo."
           : failure,
       );
@@ -31,19 +33,32 @@ export default function LoginPage() {
 
     setStatus("sending");
 
-    // Volta para a página que o usuário tentou abrir antes de ser barrado.
     const next = new URLSearchParams(window.location.search).get("next") ?? "/";
+    const cleanCode = code.trim().toUpperCase().replace(/\s+/g, "");
 
     const { error } = await authClient.signIn.magicLink({
       email: email.trim(),
       callbackURL: next,
       errorCallbackURL: "/login",
+      fetchOptions: cleanCode
+        ? { headers: { [ACCESS_CODE_HEADER]: cleanCode } }
+        : undefined,
     });
 
     if (error) {
       setStatus("error");
       setMessage(error.message ?? "Não consegui enviar o link. Tente de novo.");
       return;
+    }
+
+    // Guardado para o próximo passo: assim quem entra pela primeira vez não
+    // precisa digitar o mesmo código de novo para entrar na casa.
+    if (cleanCode) {
+      try {
+        sessionStorage.setItem(PENDING_CODE_KEY, cleanCode);
+      } catch {
+        // navegador sem sessionStorage: a tela seguinte pede o código
+      }
     }
 
     setStatus("sent");
@@ -90,6 +105,22 @@ export default function LoginPage() {
             className="field"
           />
 
+          <label htmlFor="code" className="label mt-4">
+            Código de acesso
+          </label>
+          <input
+            id="code"
+            value={code}
+            onChange={(event) => setCode(event.target.value.toUpperCase())}
+            placeholder="A1B2C3"
+            autoCapitalize="characters"
+            autoComplete="off"
+            className="field font-mono tracking-widest"
+          />
+          <p className="mt-1.5 text-xs text-muted">
+            Só na primeira vez. Quem já entrou uma vez pode deixar em branco.
+          </p>
+
           <button
             type="submit"
             disabled={status === "sending"}
@@ -103,9 +134,7 @@ export default function LoginPage() {
             Sem senha. Você recebe um link por e-mail e entra com um toque.
           </p>
 
-          {status === "error" && (
-            <p className="mt-3 text-sm text-danger">{message}</p>
-          )}
+          {status === "error" && <p className="mt-3 text-sm text-danger">{message}</p>}
         </form>
       )}
     </div>

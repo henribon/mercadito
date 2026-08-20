@@ -165,6 +165,22 @@ desse prazo, o produto aparece em **Hora de repor** no topo da lista.
 
 ## Decisões de arquitetura
 
+**Quem entra no app.** Pedir um link de acesso exige um código, validado no
+servidor pelo hook `before` do Better Auth em [`src/lib/auth.ts`](src/lib/auth.ts).
+A regra está em [`src/lib/access.ts`](src/lib/access.ts):
+
+- quem já tem conta entra sempre, sem repetir o código;
+- se ainda não existe nenhuma casa, o primeiro acesso é liberado — é quem vai
+  criar a casa e gerar o código;
+- qualquer outra pessoa precisa apresentar o código de convite de uma casa.
+
+O código é o mesmo que aparece na aba Produtos: ele autoriza a entrada **e**
+define em qual casa a pessoa cai. Quem entra com ele é adicionado à casa
+automaticamente, sem passar por tela de onboarding.
+
+A validação é no servidor de propósito: esconder o campo no formulário não
+impediria ninguém de chamar a API diretamente.
+
 **Sem RLS, escopo no servidor.** O Postgres do Neon não é exposto ao navegador:
 todo acesso passa por Server Actions, e cada uma começa resolvendo a casa a
 partir da sessão (`requireMembership()` em [`src/lib/session.ts`](src/lib/session.ts)).
@@ -215,10 +231,12 @@ estrutura `NfceReceipt` já é agnóstica de estado.
 npm test
 ```
 
-São 33 testes em duas frentes:
+São 58 testes em três frentes:
 
 - **Parsing e casamento de nomes** — HTML da SEFAZ, números e datas em formato
   brasileiro, validação da chave de acesso, similaridade de nomes de produto.
+- **Portão de acesso** — quem pode pedir um link de entrada: usuário conhecido,
+  primeiro acesso de todos, código certo, código errado e código ausente.
 - **Banco de dados** — o schema e as consultas de produção rodam contra um
   Postgres real ([PGlite](https://pglite.dev), Postgres compilado para WASM),
   sem precisar de banco remoto. Cobre a matemática do `product_stats`, o índice
