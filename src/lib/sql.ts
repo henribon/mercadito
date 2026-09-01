@@ -143,3 +143,84 @@ export const USER_BY_EMAIL = `
 export const HOUSEHOLD_COUNT = `
   select count(*)::int as n from households
 `;
+
+/* ---------------------------------------------------------------------------
+ * Codigo de 4 digitos e aparelhos confiaveis
+ * ------------------------------------------------------------------------- */
+
+/** $1 = user_id, $2 = pin_hash. Trocar o codigo e o mesmo que criar. */
+export const UPSERT_USER_PIN = `
+  insert into user_pins (user_id, pin_hash)
+  values ($1, $2)
+  on conflict (user_id) do update
+    set pin_hash = excluded.pin_hash, updated_at = now()
+`;
+
+/** $1 = user_id */
+export const USER_PIN = `
+  select pin_hash from user_pins where user_id = $1
+`;
+
+/** $1 = user_id */
+export const DELETE_USER_PIN = `
+  delete from user_pins where user_id = $1
+`;
+
+/**
+ * $1 = user_id, $2 = token_hash
+ * O conflito acontece quando o mesmo aparelho e reconfiado: zera as tentativas
+ * em vez de deixar uma linha orfa para tras.
+ */
+export const INSERT_TRUSTED_DEVICE = `
+  insert into trusted_devices (user_id, token_hash)
+  values ($1, $2)
+  on conflict (token_hash) do update
+    set user_id = excluded.user_id, failed_count = 0, last_used_at = now()
+`;
+
+/**
+ * $1 = token_hash. Traz o dono e o codigo dele na mesma ida ao banco — o login
+ * precisa dos dois para decidir.
+ */
+export const DEVICE_BY_TOKEN = `
+  select d.id, d.user_id, d.failed_count,
+         u.name as user_name, u.email as user_email,
+         p.pin_hash
+    from trusted_devices d
+    join "user" u on u.id = d.user_id
+    left join user_pins p on p.user_id = d.user_id
+   where d.token_hash = $1
+`;
+
+/** $1 = token_hash, $2 = user_id. Este navegador ja e confiavel para o dono? */
+export const DEVICE_IS_TRUSTED = `
+  select 1 as ok from trusted_devices where token_hash = $1 and user_id = $2
+`;
+
+/** $1 = device_id. Devolve o total ja incrementado. */
+export const DEVICE_FAILED = `
+  update trusted_devices set failed_count = failed_count + 1
+   where id = $1
+  returning failed_count
+`;
+
+/** $1 = device_id */
+export const DEVICE_USED = `
+  update trusted_devices set failed_count = 0, last_used_at = now()
+   where id = $1
+`;
+
+/** $1 = device_id */
+export const DELETE_DEVICE = `
+  delete from trusted_devices where id = $1
+`;
+
+/** $1 = token_hash */
+export const DELETE_DEVICE_BY_TOKEN = `
+  delete from trusted_devices where token_hash = $1
+`;
+
+/** $1 = user_id */
+export const DELETE_DEVICES_FOR_USER = `
+  delete from trusted_devices where user_id = $1
+`;

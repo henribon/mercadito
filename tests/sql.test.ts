@@ -10,6 +10,14 @@ import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import {
   ADD_PRODUCT_TO_LIST,
   CLEAR_BOUGHT_ITEMS,
+  DELETE_DEVICES_FOR_USER,
+  DELETE_DEVICE,
+  DELETE_DEVICE_BY_TOKEN,
+  DELETE_USER_PIN,
+  DEVICE_BY_TOKEN,
+  DEVICE_FAILED,
+  DEVICE_IS_TRUSTED,
+  DEVICE_USED,
   HOUSEHOLD_BY_INVITE_CODE,
   HOUSEHOLD_COUNT,
   HOUSEHOLD_FOR_USER,
@@ -17,9 +25,12 @@ import {
   INSERT_MEMBER,
   PENDING_ITEMS,
   PRODUCTS_WITH_STATS,
+  INSERT_TRUSTED_DEVICE,
   PURCHASE_SUMMARIES,
   UPSERT_PRODUCT,
+  UPSERT_USER_PIN,
   USER_BY_EMAIL,
+  USER_PIN,
 } from "../src/lib/sql.ts";
 
 /**
@@ -110,6 +121,8 @@ describe("schema", () => {
       "purchases",
       "purchase_items",
       "list_items",
+      "user_pins",
+      "trusted_devices",
     ]) {
       assert.ok(names.includes(expected), `faltou a tabela ${expected}`);
     }
@@ -421,5 +434,124 @@ describe("portao de acesso", () => {
   test("HOUSEHOLD_COUNT conta as casas existentes", async () => {
     const { rows } = await db.query<{ n: number }>(HOUSEHOLD_COUNT);
     assert.ok(rows[0].n >= 2, "o seed cria pelo menos duas casas");
+  });
+});
+
+describe("codigo de 4 digitos", () => {
+  const TOKEN = "hash-do-token-do-celular-do-henri";
+  const OUTRO_TOKEN = "hash-do-token-do-notebook-do-henri";
+
+  test("UPSERT_USER_PIN cria e depois troca o código, sem duplicar", async () => {
+    await db.query(UPSERT_USER_PIN, ["user-henri", "scrypt$aa$bb"]);
+    await db.query(UPSERT_USER_PIN, ["user-henri", "scrypt$cc$dd"]);
+
+    const { rows } = await db.query<{ pin_hash: string }>(USER_PIN, ["user-henri"]);
+    assert.equal(rows.length, 1, "cada pessoa tem um código só");
+    assert.equal(rows[0].pin_hash, "scrypt$cc$dd");
+  });
+
+  test("DEVICE_BY_TOKEN traz o dono e o código dele de uma vez", async () => {
+    await db.query(INSERT_TRUSTED_DEVICE, ["user-henri", TOKEN]);
+
+    const { rows } = await db.query<{
+      user_id: string;
+      user_name: string;
+      failed_count: number;
+      pin_hash: string | null;
+    }>(DEVICE_BY_TOKEN, [TOKEN]);
+
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].user_id, "user-henri");
+    assert.equal(rows[0].user_name, "Henri");
+    assert.equal(rows[0].failed_count, 0);
+    assert.equal(rows[0].pin_hash, "scrypt$cc$dd");
+  });
+
+  test("aparelho de quem ainda não criou código vem com pin_hash nulo", async () => {
+    await db.query(INSERT_TRUSTED_DEVICE, ["user-esposa", "token-da-esposa"]);
+
+    const { rows } = await db.query<{ pin_hash: string | null }>(DEVICE_BY_TOKEN, [
+      "token-da-esposa",
+    ]);
+
+    assert.equal(rows.length, 1, "o join com user_pins não pode sumir com a linha");
+    assert.equal(rows[0].pin_hash, null);
+  });
+
+  test("DEVICE_FAILED conta os erros e DEVICE_USED zera", async () => {
+    const { rows: dev } = await db.query<{ id: string }>(DEVICE_BY_TOKEN, [TOKEN]);
+    const id = dev[0].id;
+
+    const primeira = await db.query<{ failed_count: number }>(DEVICE_FAILED, [id]);
+    const segunda = await db.query<{ failed_count: number }>(DEVICE_FAILED, [id]);
+
+    assert.equal(primeira.rows[0].failed_count, 1);
+    assert.equal(segunda.rows[0].failed_count, 2);
+
+    await db.query(DEVICE_USED, [id]);
+    const { rows } = await db.query<{ failed_count: number }>(DEVICE_BY_TOKEN, [TOKEN]);
+    assert.equal(rows[0].failed_count, 0, "acertar tem que limpar o histórico");
+  });
+
+  test("reconfiar o mesmo token atualiza a linha em vez de duplicar", async () => {
+    await db.query(DEVICE_FAILED, [
+      (await db.query<{ id: string }>(DEVICE_BY_TOKEN, [TOKEN])).rows[0].id,
+    ]);
+    await db.query(INSERT_TRUSTED_DEVICE, ["user-henri", TOKEN]);
+
+    const { rows } = await db.query<{ failed_count: number }>(DEVICE_BY_TOKEN, [TOKEN]);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].failed_count, 0);
+  });
+
+  test("DEVICE_IS_TRUSTED só reconhece o aparelho do próprio dono", async () => {
+    const doDono = await db.query(DEVICE_IS_TRUSTED, [TOKEN, "user-henri"]);
+    assert.equal(doDono.rows.length, 1);
+
+    const deOutro = await db.query(DEVICE_IS_TRUSTED, [TOKEN, "user-esposa"]);
+    assert.equal(deOutro.rows.length, 0);
+  });
+
+  test("DELETE_DEVICE_BY_TOKEN apaga só aquele aparelho", async () => {
+    await db.query(INSERT_TRUSTED_DEVICE, ["user-henri", OUTRO_TOKEN]);
+    await db.query(DELETE_DEVICE_BY_TOKEN, [OUTRO_TOKEN]);
+
+    assert.equal((await db.query(DEVICE_BY_TOKEN, [OUTRO_TOKEN])).rows.length, 0);
+    assert.equal((await db.query(DEVICE_BY_TOKEN, [TOKEN])).rows.length, 1);
+  });
+
+  test("remover o código derruba todos os aparelhos do dono", async () => {
+    await db.query(INSERT_TRUSTED_DEVICE, ["user-henri", OUTRO_TOKEN]);
+
+    await db.query(DELETE_USER_PIN, ["user-henri"]);
+    await db.query(DELETE_DEVICES_FOR_USER, ["user-henri"]);
+
+    assert.equal((await db.query(USER_PIN, ["user-henri"])).rows.length, 0);
+    assert.equal((await db.query(DEVICE_BY_TOKEN, [TOKEN])).rows.length, 0);
+    assert.equal((await db.query(DEVICE_BY_TOKEN, [OUTRO_TOKEN])).rows.length, 0);
+
+    const daEsposa = await db.query(DEVICE_BY_TOKEN, ["token-da-esposa"]);
+    assert.equal(daEsposa.rows.length, 1, "não é para mexer no aparelho do outro");
+  });
+
+  test("apagar a conta leva junto o código e os aparelhos", async () => {
+    await db.query(UPSERT_USER_PIN, ["user-outro", "scrypt$ee$ff"]);
+    await db.query(INSERT_TRUSTED_DEVICE, ["user-outro", "token-do-outro"]);
+
+    await db.query(`delete from "user" where id = 'user-outro'`);
+
+    assert.equal((await db.query(USER_PIN, ["user-outro"])).rows.length, 0);
+    assert.equal((await db.query(DEVICE_BY_TOKEN, ["token-do-outro"])).rows.length, 0);
+  });
+
+  test("DELETE_DEVICE remove o aparelho que errou vezes demais", async () => {
+    await db.query(INSERT_TRUSTED_DEVICE, ["user-esposa", "token-passageiro"]);
+    const { rows } = await db.query<{ id: string }>(DEVICE_BY_TOKEN, [
+      "token-passageiro",
+    ]);
+
+    await db.query(DELETE_DEVICE, [rows[0].id]);
+
+    assert.equal((await db.query(DEVICE_BY_TOKEN, ["token-passageiro"])).rows.length, 0);
   });
 });

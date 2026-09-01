@@ -154,3 +154,34 @@ from products p
 left join purchase_items pi on pi.product_id = p.id
 left join purchases pu on pu.id = pi.purchase_id
 group by p.id, p.household_id;
+
+-- ---------------------------------------------------------------------------
+-- Codigo de 4 digitos: entrar sem passar pelo e-mail de novo.
+--
+-- O codigo sozinho nao identifica ninguem — 4 digitos sao 10 mil combinacoes.
+-- Quem identifica e o aparelho: no primeiro login por e-mail o navegador
+-- recebe um cookie com um token aleatorio de 32 bytes, e e a linha em
+-- trusted_devices que diz de quem ele e. Sem esse cookie o codigo nem chega a
+-- ser conferido.
+-- ---------------------------------------------------------------------------
+create table if not exists user_pins (
+  user_id    text primary key references "user"(id) on delete cascade,
+  -- scrypt$<salt hex>$<hash hex>; o codigo em si nunca e gravado.
+  pin_hash   text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists trusted_devices (
+  id           uuid primary key default gen_random_uuid(),
+  user_id      text not null references "user"(id) on delete cascade,
+  -- sha256 do token do cookie: vazar o banco nao entrega o aparelho de ninguem.
+  token_hash   text not null unique,
+  -- Erros seguidos no codigo. Passou do limite, o aparelho perde a confianca e
+  -- volta a exigir o link por e-mail.
+  failed_count integer not null default 0,
+  created_at   timestamptz not null default now(),
+  last_used_at timestamptz not null default now()
+);
+
+create index if not exists trusted_devices_user_idx on trusted_devices (user_id);

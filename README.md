@@ -8,6 +8,8 @@ direto do QR Code do cupom fiscal (NFC-e de São Paulo).
 - **Última vez comprado** — cada produto guarda data, preço e frequência.
 - **Lembrete de reposição** — marque um produto como "compramos sempre" e ele
   reaparece na lista quando passa do intervalo de costume.
+- **Entrar com 4 dígitos** — depois do primeiro acesso por e-mail, cada um cria
+  o próprio código e abre o app sem esperar link nenhum.
 
 Custo zero: o plano gratuito do Neon permite 100 projetos e a Vercel hospeda o
 app de graça.
@@ -82,6 +84,10 @@ link aparece no terminal**, o que permite testar tudo antes de mexer com e-mail.
 
 Ao entrar, crie a casa. O código de convite aparece na aba **Produtos**, no fim
 da página — é ele que sua esposa usa para entrar na mesma lista.
+
+Ainda na aba **Produtos**, em *Entrar no app*, crie seu **código de 4 dígitos**.
+Da próxima vez a tela de login já vem com o teclado numérico, e o e-mail só volta
+a ser necessário em um aparelho novo.
 
 ## 5. Envio do link por e-mail
 
@@ -181,6 +187,23 @@ automaticamente, sem passar por tela de onboarding.
 A validação é no servidor de propósito: esconder o campo no formulário não
 impediria ninguém de chamar a API diretamente.
 
+**Entrar sem e-mail, com 4 dígitos.** O magic link é ótimo para a primeira vez e
+péssimo para todo dia: abrir o e-mail no meio do mercado é atrito. Depois de
+entrar uma vez, cada pessoa cria um código de 4 dígitos na aba Produtos.
+
+Quatro dígitos são só 10 mil combinações, então o código sozinho não guarda
+nada — quem identifica a pessoa é o **aparelho**. Ao criar o código, o navegador
+recebe um cookie httpOnly com um token aleatório de 32 bytes; no banco fica
+apenas o `sha256` dele, ligado ao dono em `trusted_devices`. Sem esse cookie o
+código nem chega a ser conferido, então não há como alguém varrer as combinações
+de fora. Cinco erros seguidos derrubam a confiança do aparelho e o e-mail volta a
+ser exigido. O código em si é guardado com `scrypt` e sal por usuário.
+
+A regra está em [`src/lib/pin.ts`](src/lib/pin.ts) e os endpoints em
+[`src/lib/pin-plugin.ts`](src/lib/pin-plugin.ts) — um plugin do Better Auth, e
+não uma Server Action, porque entrar pelo código cria uma sessão e isso exige o
+contexto de um endpoint do próprio Better Auth.
+
 **Sem RLS, escopo no servidor.** O Postgres do Neon não é exposto ao navegador:
 todo acesso passa por Server Actions, e cada uma começa resolvendo a casa a
 partir da sessão (`requireMembership()` em [`src/lib/session.ts`](src/lib/session.ts)).
@@ -231,12 +254,15 @@ estrutura `NfceReceipt` já é agnóstica de estado.
 npm test
 ```
 
-São 58 testes em três frentes:
+São 84 testes em quatro frentes:
 
 - **Parsing e casamento de nomes** — HTML da SEFAZ, números e datas em formato
   brasileiro, validação da chave de acesso, similaridade de nomes de produto.
 - **Portão de acesso** — quem pode pedir um link de entrada: usuário conhecido,
   primeiro acesso de todos, código certo, código errado e código ausente.
+- **Código de 4 dígitos** — o par aparelho + código: hash e conferência, cookie
+  de outro aparelho, código de quem já removeu o dele, e as tentativas até o
+  aparelho perder a confiança.
 - **Banco de dados** — o schema e as consultas de produção rodam contra um
   Postgres real ([PGlite](https://pglite.dev), Postgres compilado para WASM),
   sem precisar de banco remoto. Cobre a matemática do `product_stats`, o índice
@@ -256,16 +282,18 @@ src/
     page.tsx              Lista: pendentes, sugestões de reposição, adicionar
     escanear/             Câmera, consulta à SEFAZ e conferência da nota
     historico/            Compras e detalhe de cada nota
-    produtos/             Catálogo, recorrência, código de convite
+    produtos/             Catálogo, recorrência, código de convite, código de acesso
     api/auth/[...all]/    Rotas do Better Auth
     api/nfce/             Proxy autenticado para o portal da SEFAZ
-  components/             Provider com polling, tab bar, scanner, ícones
+  components/             Provider com polling, tab bar, scanner, ícones, PinInput
   lib/
     actions.ts            Server Actions: toda a camada de dados
     session.ts            Fronteira de segurança (sessão -> casa)
     sql.ts                Consultas SQL, compartilhadas com os testes
     db.ts                 Pool do Postgres e conversão de tipos
-    auth.ts               Better Auth (magic link)
+    auth.ts               Better Auth (magic link + código de 4 dígitos)
+    pin.ts                Regra e criptografia do código de 4 dígitos
+    pin-plugin.ts         Endpoints /api/auth/codigo/* (plugin do Better Auth)
     email.ts              Envio do link via SMTP
     nfce/qr.ts            Interpreta o conteúdo do QR e valida a chave
     nfce/parse.ts         Extrai itens e totais do HTML da SEFAZ
@@ -273,5 +301,5 @@ src/
     data.ts               Regras puras: recorrência e sugestões
 neon/schema.sql           Tabelas, índices e a view de estatísticas
 scripts/db-setup.mjs      Aplica o schema no banco (npm run db:setup)
-tests/                    Parser, normalização e banco (PGlite)
+tests/                    Parser, normalização, códigos de acesso e banco (PGlite)
 ```
