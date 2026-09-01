@@ -8,6 +8,7 @@ import { ACCESS_CODE_HEADER } from "./auth-shared";
 import { resolveBaseUrl, trustedOrigins } from "./base-url";
 import { pool, queryOne } from "./db";
 import { sendMagicLinkEmail } from "./email";
+import { codigoDeAcesso } from "./pin-plugin";
 import { HOUSEHOLD_BY_INVITE_CODE, HOUSEHOLD_COUNT, USER_BY_EMAIL } from "./sql";
 
 /**
@@ -77,6 +78,9 @@ export const auth = betterAuth({
         await sendMagicLinkEmail(email, url);
       },
     }),
+    // Depois do primeiro login por e-mail, o codigo de 4 digitos passa a ser o
+    // caminho normal de entrada. Veja src/lib/pin.ts.
+    codigoDeAcesso(),
     // nextCookies precisa ser o ultimo plugin da lista.
     nextCookies(),
   ],

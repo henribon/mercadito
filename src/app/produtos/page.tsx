@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useApp } from "@/components/AppProvider";
+import { PinInput } from "@/components/PinInput";
 import {
   IconChevronRight,
   IconPlus,
@@ -12,6 +13,13 @@ import {
 } from "@/components/Icons";
 import { addProductToList, deleteProduct, updateProduct } from "@/lib/actions";
 import { authClient } from "@/lib/auth-client";
+import { PIN_LENGTH } from "@/lib/auth-shared";
+import {
+  ativarCodigoAqui,
+  definirCodigo,
+  removerCodigo,
+  statusDoCodigo,
+} from "@/lib/pin-client";
 import { expectedInterval, suggestedRecurrenceDays } from "@/lib/data";
 import { everyDays, money, relativeDays } from "@/lib/format";
 import { normalizeName } from "@/lib/normalize";
@@ -92,6 +100,7 @@ export default function ProdutosPage() {
         </>
       )}
 
+      <CodigoCard />
       <CasaCard />
     </div>
   );
@@ -340,6 +349,204 @@ function Stat({ label, value }: { label: string; value: string }) {
       <dt className="text-muted">{label}</dt>
       <dd className="mt-0.5 text-sm text-text">{value}</dd>
     </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+
+/**
+ * O codigo de 4 digitos, do ponto de vista de quem ja esta dentro.
+ *
+ * Tres estados, porque sao tres coisas diferentes: nao ter codigo, ter um que
+ * este navegador ainda nao aceita (segundo aparelho) e ter tudo pronto.
+ */
+function CodigoCard() {
+  const [status, setStatus] = useState<{
+    configurado: boolean;
+    aparelhoAtivo: boolean;
+  } | null>(null);
+
+  const [editando, setEditando] = useState(false);
+  const [pin, setPin] = useState("");
+  const [repetido, setRepetido] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    statusDoCodigo()
+      .then((atual) => {
+        if (!cancelled) setStatus(atual);
+      })
+      .catch(() => {
+        if (!cancelled) setStatus({ configurado: false, aparelhoAtivo: false });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function limpar() {
+    setPin("");
+    setRepetido("");
+    setError(null);
+  }
+
+  /** Toda acao termina relendo o status: e ele que decide o que a tela mostra. */
+  async function executar(acao: () => Promise<unknown>) {
+    setBusy(true);
+    setError(null);
+    try {
+      await acao();
+      setStatus(await statusDoCodigo());
+      setEditando(false);
+      limpar();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Não consegui salvar.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function salvar(event: React.FormEvent) {
+    event.preventDefault();
+
+    if (pin !== repetido) {
+      setError("Os dois códigos não são iguais.");
+      setRepetido("");
+      return;
+    }
+
+    await executar(() => definirCodigo(pin));
+  }
+
+  if (!status) return null;
+
+  const titulo = (
+    <>
+      <p className="text-sm">Código de {PIN_LENGTH} dígitos</p>
+      <p className="text-xs text-muted">
+        Depois de criado, é ele que abre o app — sem esperar e-mail.
+      </p>
+    </>
+  );
+
+  if (editando || !status.configurado) {
+    return (
+      <Secao>
+        <form onSubmit={salvar} className="card p-4">
+          {titulo}
+
+          <div className="mt-4 space-y-4">
+            <PinInput
+              label={status.configurado ? "Novo código" : "Escolha um código"}
+              value={pin}
+              onChange={(value) => {
+                setPin(value);
+                setError(null);
+              }}
+              disabled={busy}
+              autoFocus={editando}
+            />
+            <PinInput
+              label="Repita para confirmar"
+              value={repetido}
+              onChange={(value) => {
+                setRepetido(value);
+                setError(null);
+              }}
+              disabled={busy}
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={busy || pin.length < PIN_LENGTH || repetido.length < PIN_LENGTH}
+            className="btn-primary mt-5 w-full"
+          >
+            {busy && <IconSpinner size={16} />}
+            {status.configurado ? "Trocar código" : "Criar código"}
+          </button>
+
+          {editando && (
+            <button
+              type="button"
+              onClick={() => {
+                setEditando(false);
+                limpar();
+              }}
+              className="btn-quiet mt-1 w-full"
+            >
+              Cancelar
+            </button>
+          )}
+
+          {error && <p className="mt-3 text-sm text-danger">{error}</p>}
+        </form>
+      </Secao>
+    );
+  }
+
+  return (
+    <Secao>
+      <div className="card p-4">
+        {titulo}
+
+        <p className="mt-3 text-sm">
+          {status.aparelhoAtivo
+            ? "Ativo neste aparelho."
+            : "Criado, mas este aparelho ainda pede o e-mail."}
+        </p>
+
+        <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-4">
+          {!status.aparelhoAtivo && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void executar(ativarCodigoAqui)}
+              className="btn-primary flex-1"
+            >
+              {busy && <IconSpinner size={16} />}
+              Usar neste aparelho
+            </button>
+          )}
+
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setEditando(true)}
+            className="btn-ghost flex-1"
+          >
+            Trocar
+          </button>
+
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void executar(removerCodigo)}
+            className="btn-quiet flex-1"
+          >
+            Remover
+          </button>
+        </div>
+
+        {error && <p className="mt-3 text-sm text-danger">{error}</p>}
+      </div>
+    </Secao>
+  );
+}
+
+/** Mesmo cabecalho discreto que a CasaCard usa. */
+function Secao({ children }: { children: React.ReactNode }) {
+  return (
+    <section className="mt-8">
+      <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">
+        Entrar no app
+      </h2>
+      {children}
+    </section>
   );
 }
 

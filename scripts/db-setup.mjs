@@ -123,7 +123,8 @@ const { rows: tables } = await client.query(
   `select table_name from information_schema.tables
     where table_schema = 'public'
       and table_name in ('households','household_members','products','product_aliases',
-                         'purchases','purchase_items','list_items')
+                         'purchases','purchase_items','list_items',
+                         'user_pins','trusted_devices')
     order by table_name`,
 );
 
@@ -136,7 +137,7 @@ console.log(`${GREEN}✓${RESET} Schema aplicado`);
 console.log(`${DIM}  tabelas: ${tables.map((t) => t.table_name).join(", ")}${RESET}`);
 console.log(`${DIM}  view:    ${views.map((v) => v.table_name).join(", ") || "—"}${RESET}`);
 
-if (tables.length !== 7 || views.length !== 1) {
+if (tables.length !== 9 || views.length !== 1) {
   await client.end();
   fail("Faltou alguma tabela ou a view product_stats.");
 }
