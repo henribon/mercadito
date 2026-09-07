@@ -127,3 +127,39 @@ export type PurchaseSummary = {
   total_amount: number | null;
   item_count: number;
 };
+
+/* ---------------------------------------------------------------------------
+ * Resumo de gastos
+ * ------------------------------------------------------------------------- */
+
+/** Quanto foi para cada mercado numa janela de tempo. */
+export type StoreSpend = {
+  /** CNPJ quando a nota traz; senao o nome em maiusculas. */
+  store_key: string;
+  store_name: string;
+  purchase_count: number;
+  total: number;
+};
+
+/** Produto comprado mais de uma vez: o que se repete na despesa. */
+export type RepeatProduct = {
+  product_id: string;
+  product_name: string;
+  unit: string;
+  /** Compras distintas, nao linhas de nota. */
+  purchase_count: number;
+  total_quantity: number;
+  total_spent: number;
+  avg_unit_price: number | null;
+  last_purchased_at: string;
+};
+
+/** Preco medio de um produto num mercado — a materia-prima da comparacao. */
+export type StorePrice = {
+  product_id: string;
+  product_name: string;
+  store_key: string;
+  store_name: string;
+  avg_unit_price: number;
+  purchase_count: number;
+};

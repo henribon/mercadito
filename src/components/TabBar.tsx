@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { IconBox, IconHistory, IconList, IconScan } from "./Icons";
+import { IconBox, IconChart, IconHistory, IconList, IconScan } from "./Icons";
 
 const TABS = [
   { href: "/", label: "Lista", Icon: IconList },
   { href: "/escanear", label: "Escanear", Icon: IconScan },
   { href: "/historico", label: "Histórico", Icon: IconHistory },
+  { href: "/resumo", label: "Resumo", Icon: IconChart },
   { href: "/produtos", label: "Produtos", Icon: IconBox },
 ] as const;
 

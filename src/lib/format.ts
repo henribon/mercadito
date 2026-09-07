@@ -72,3 +72,34 @@ export function quantity(value: number, unit?: string | null): string {
   const suffix = unit && unit !== "UN" ? ` ${unit.toLowerCase()}` : "";
   return `${formatted}${suffix}`;
 }
+
+const MONTH_YEAR = new Intl.DateTimeFormat("pt-BR", {
+  month: "long",
+  year: "numeric",
+});
+
+const MONTH_ONLY = new Intl.DateTimeFormat("pt-BR", { month: "long" });
+
+const PERCENT = new Intl.NumberFormat("pt-BR", {
+  style: "percent",
+  maximumFractionDigits: 0,
+});
+
+function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+/** "Setembro de 2026" */
+export function monthLabel(value: Date): string {
+  return capitalize(MONTH_YEAR.format(value));
+}
+
+/** "agosto" — usado no meio da frase, entao sem maiuscula. */
+export function monthName(value: Date): string {
+  return MONTH_ONLY.format(value);
+}
+
+/** "12%" a partir de 0,1234. Sempre positivo: o sinal e a seta ao lado. */
+export function percent(ratio: number): string {
+  return PERCENT.format(Math.abs(ratio));
+}

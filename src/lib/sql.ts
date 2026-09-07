@@ -224,3 +224,91 @@ export const DELETE_DEVICE_BY_TOKEN = `
 export const DELETE_DEVICES_FOR_USER = `
   delete from trusted_devices where user_id = $1
 `;
+
+/* ---------------------------------------------------------------------------
+ * Resumo de gastos
+ *
+ * As janelas de tempo chegam prontas do cliente ($2 e $3, ISO). O servidor roda
+ * em UTC e o celular nao: se o mes fosse recortado aqui, uma compra das 22h do
+ * dia 31 cairia no mes seguinte. Quem sabe onde o mes comeca e o aparelho de
+ * quem esta olhando.
+ * ------------------------------------------------------------------------- */
+
+/** $1 = household_id, $2 = inicio, $3 = fim (exclusivo) */
+export const SPEND_TOTAL = `
+  select count(*)::int as purchase_count,
+         coalesce(sum(coalesce(p.paid_amount, p.total_amount, 0)), 0) as total
+    from purchases p
+   where p.household_id = $1
+     and p.purchased_at >= $2 and p.purchased_at < $3
+`;
+
+/**
+ * $1 = household_id, $2 = inicio, $3 = fim (exclusivo)
+ *
+ * A chave do mercado e o CNPJ; o nome so entra quando a nota veio sem ele. Duas
+ * lojas da mesma rede tem CNPJs diferentes e sao mercados diferentes de
+ * proposito — o preco e a distancia sao de cada loja, nao da bandeira.
+ */
+export const SPEND_BY_STORE = `
+  select coalesce(p.store_cnpj, upper(coalesce(btrim(p.store_name), ''))) as store_key,
+         min(coalesce(nullif(btrim(p.store_name), ''), 'Sem identificação')) as store_name,
+         count(*)::int as purchase_count,
+         coalesce(sum(coalesce(p.paid_amount, p.total_amount, 0)), 0) as total
+    from purchases p
+   where p.household_id = $1
+     and p.purchased_at >= $2 and p.purchased_at < $3
+   group by 1
+   order by total desc, purchase_count desc
+`;
+
+/**
+ * $1 = household_id, $2 = desde, $3 = limite
+ *
+ * `having > 1` porque a pergunta e sobre reincidencia: um produto comprado uma
+ * vez so nao diz nada sobre habito. Conta compras distintas, nao linhas — duas
+ * caixas de leite na mesma nota continuam sendo uma ida ao mercado.
+ */
+export const TOP_REPEAT_PRODUCTS = `
+  select pr.id   as product_id,
+         pr.name as product_name,
+         pr.unit as unit,
+         count(distinct pu.id)::int as purchase_count,
+         coalesce(sum(i.quantity), 0)    as total_quantity,
+         coalesce(sum(i.total_price), 0) as total_spent,
+         round(avg(i.unit_price)::numeric, 2) as avg_unit_price,
+         max(pu.purchased_at) as last_purchased_at
+    from purchase_items i
+    join purchases pu on pu.id = i.purchase_id
+    join products  pr on pr.id = i.product_id
+   where pu.household_id = $1
+     and pu.purchased_at >= $2
+   group by pr.id, pr.name, pr.unit
+  having count(distinct pu.id) > 1
+   order by purchase_count desc, total_spent desc
+   limit $3
+`;
+
+/**
+ * $1 = household_id, $2 = desde
+ *
+ * Preco medio de cada produto em cada mercado. A comparacao em si (quem e mais
+ * barato, em quantos produtos) fica em `data.ts`, para ser testada sem banco.
+ */
+export const PRICE_BY_STORE = `
+  select pr.id   as product_id,
+         pr.name as product_name,
+         coalesce(pu.store_cnpj, upper(coalesce(btrim(pu.store_name), ''))) as store_key,
+         min(coalesce(nullif(btrim(pu.store_name), ''), 'Sem identificação')) as store_name,
+         round(avg(i.unit_price)::numeric, 4) as avg_unit_price,
+         count(distinct pu.id)::int as purchase_count
+    from purchase_items i
+    join purchases pu on pu.id = i.purchase_id
+    join products  pr on pr.id = i.product_id
+   where pu.household_id = $1
+     and pu.purchased_at >= $2
+     and i.unit_price is not null
+     and i.unit_price > 0
+   group by pr.id, pr.name, 3
+   order by pr.name, avg_unit_price
+`;

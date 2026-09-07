@@ -52,6 +52,13 @@ export const IconBox = (p: IconProps) => (
   </Icon>
 );
 
+export const IconChart = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M3 3v16a2 2 0 0 0 2 2h16" />
+    <path d="M7 15v2M12 10v7M17 6v11" />
+  </Icon>
+);
+
 export const IconPlus = (p: IconProps) => (
   <Icon {...p}>
     <path d="M12 5v14M5 12h14" />
@@ -73,6 +80,26 @@ export const IconX = (p: IconProps) => (
 export const IconChevronRight = (p: IconProps) => (
   <Icon {...p}>
     <path d="m9 18 6-6-6-6" />
+  </Icon>
+);
+
+export const IconArrowDown = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M12 5v14M19 12l-7 7-7-7" />
+  </Icon>
+);
+
+export const IconArrowUp = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M12 19V5M5 12l7-7 7 7" />
+  </Icon>
+);
+
+export const IconStore = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M3 9.5 4.5 4h15L21 9.5" />
+    <path d="M3 9.5a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0" />
+    <path d="M5 12v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8" />
   </Icon>
 );
 

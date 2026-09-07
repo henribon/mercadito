@@ -24,14 +24,19 @@ import {
   INSERT_HOUSEHOLD,
   INSERT_MEMBER,
   PENDING_ITEMS,
+  PRICE_BY_STORE,
   PRODUCTS_WITH_STATS,
   INSERT_TRUSTED_DEVICE,
   PURCHASE_SUMMARIES,
+  SPEND_BY_STORE,
+  SPEND_TOTAL,
+  TOP_REPEAT_PRODUCTS,
   UPSERT_PRODUCT,
   UPSERT_USER_PIN,
   USER_BY_EMAIL,
   USER_PIN,
 } from "../src/lib/sql.ts";
+import { comparePrices, rankStoresByPrice } from "../src/lib/data.ts";
 
 /**
  * Roda o schema e as consultas de producao contra um Postgres real (PGlite,
@@ -553,5 +558,215 @@ describe("codigo de 4 digitos", () => {
     await db.query(DELETE_DEVICE, [rows[0].id]);
 
     assert.equal((await db.query(DEVICE_BY_TOKEN, ["token-passageiro"])).rows.length, 0);
+  });
+});
+
+describe("resumo de gastos", () => {
+  // Casa propria, com datas fixas: os numeros do resumo nao podem depender de
+  // que dia o teste roda.
+  const CASA = "eeeeeeee-0000-0000-0000-000000000001";
+  const LEITE_R = "eeeeeeee-1111-0000-0000-000000000001";
+  const CAFE_R = "eeeeeeee-1111-0000-0000-000000000002";
+  const ARROZ_R = "eeeeeeee-1111-0000-0000-000000000003";
+
+  const MARCO = ["2026-03-01T00:00:00Z", "2026-04-01T00:00:00Z"];
+  const FEVEREIRO = ["2026-02-01T00:00:00Z", "2026-03-01T00:00:00Z"];
+  const ANO = "2026-01-01T00:00:00Z";
+
+  before(async () => {
+    await db.exec(`
+      insert into households (id, name, invite_code) values
+        ('${CASA}', 'Casa do resumo', 'RES001');
+
+      insert into products (id, household_id, name, norm_name) values
+        ('${LEITE_R}', '${CASA}', 'Leite', 'LEITE'),
+        ('${CAFE_R}',  '${CASA}', 'Cafe',  'CAFE'),
+        ('${ARROZ_R}', '${CASA}', 'Arroz', 'ARROZ');
+
+      insert into purchases
+        (id, household_id, store_name, store_cnpj, access_key,
+         total_amount, paid_amount, purchased_at)
+      values
+        ('eeeeeeee-2222-0000-0000-000000000001', '${CASA}', 'Mercado Barato', '111', 'R1', 100, 100, '2026-03-05T10:00:00Z'),
+        ('eeeeeeee-2222-0000-0000-000000000002', '${CASA}', 'Mercado Barato', '111', 'R2',  50,  50, '2026-03-20T10:00:00Z'),
+        ('eeeeeeee-2222-0000-0000-000000000003', '${CASA}', 'Mercado Caro',   '222', 'R3', 210, 200, '2026-03-25T10:00:00Z'),
+        ('eeeeeeee-2222-0000-0000-000000000004', '${CASA}', 'Mercado Barato', '111', 'R4',  70,  70, '2026-02-10T10:00:00Z'),
+        -- nota sem estabelecimento e sem valor pago: exercita os dois coalesce
+        ('eeeeeeee-2222-0000-0000-000000000005', '${CASA}', null, null, 'R5', 5, null, '2026-03-28T10:00:00Z');
+
+      insert into purchase_items
+        (purchase_id, household_id, product_id, raw_description,
+         quantity, unit, unit_price, total_price, position)
+      values
+        ('eeeeeeee-2222-0000-0000-000000000001', '${CASA}', '${LEITE_R}', 'LEITE 1L',  2, 'UN',  4.00,  8.00, 0),
+        ('eeeeeeee-2222-0000-0000-000000000001', '${CASA}', '${CAFE_R}',  'CAFE 500G', 1, 'UN', 15.00, 15.00, 1),
+        ('eeeeeeee-2222-0000-0000-000000000002', '${CASA}', '${LEITE_R}', 'LEITE 1L',  2, 'UN',  4.00,  8.00, 0),
+        ('eeeeeeee-2222-0000-0000-000000000003', '${CASA}', '${LEITE_R}', 'LEITE 1L',  1, 'UN',  5.00,  5.00, 0),
+        ('eeeeeeee-2222-0000-0000-000000000003', '${CASA}', '${CAFE_R}',  'CAFE 500G', 1, 'UN', 30.00, 30.00, 1),
+        ('eeeeeeee-2222-0000-0000-000000000003', '${CASA}', '${ARROZ_R}', 'ARROZ 5KG', 1, 'UN', 26.00, 26.00, 2),
+        ('eeeeeeee-2222-0000-0000-000000000004', '${CASA}', '${ARROZ_R}', 'ARROZ 5KG', 1, 'UN', 30.00, 30.00, 0);
+    `);
+  });
+
+  test("SPEND_TOTAL soma o mes e cai para o total quando nao houve valor pago", async () => {
+    const { rows } = await db.query<{ purchase_count: number; total: string }>(
+      SPEND_TOTAL,
+      [CASA, ...MARCO],
+    );
+
+    assert.equal(rows[0].purchase_count, 4);
+    // 100 + 50 + 200 + 5 (essa ultima so tem total_amount)
+    assert.equal(Number(rows[0].total), 355);
+  });
+
+  test("SPEND_TOTAL nao deixa a compra do dia 28 vazar para fevereiro", async () => {
+    const { rows } = await db.query<{ purchase_count: number; total: string }>(
+      SPEND_TOTAL,
+      [CASA, ...FEVEREIRO],
+    );
+
+    assert.equal(rows[0].purchase_count, 1);
+    assert.equal(Number(rows[0].total), 70);
+  });
+
+  test("SPEND_TOTAL de um mes sem compra devolve zero, nao linha vazia", async () => {
+    const { rows } = await db.query<{ purchase_count: number; total: string }>(
+      SPEND_TOTAL,
+      [CASA, "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"],
+    );
+
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].purchase_count, 0);
+    assert.equal(Number(rows[0].total), 0);
+  });
+
+  test("SPEND_BY_STORE separa por mercado, do maior gasto para o menor", async () => {
+    const { rows } = await db.query<{
+      store_key: string;
+      store_name: string;
+      purchase_count: number;
+      total: string;
+    }>(SPEND_BY_STORE, [CASA, ...MARCO]);
+
+    assert.deepEqual(
+      rows.map((row) => [row.store_name, row.purchase_count, Number(row.total)]),
+      [
+        ["Mercado Caro", 1, 200],
+        ["Mercado Barato", 2, 150],
+        ["Sem identificação", 1, 5],
+      ],
+    );
+
+    // O CNPJ e quem agrupa: as duas idas ao Barato viraram uma linha so.
+    assert.equal(rows[1].store_key, "111");
+  });
+
+  test("SPEND_BY_STORE nao mistura as compras de outra casa", async () => {
+    const { rows } = await db.query<{ store_name: string }>(SPEND_BY_STORE, [
+      HOUSE_A,
+      ...MARCO,
+    ]);
+
+    assert.ok(
+      !rows.some((row) => row.store_name.startsWith("Mercado Barato")),
+      "vazou mercado de outra casa",
+    );
+  });
+
+  test("TOP_REPEAT_PRODUCTS conta compras distintas, nao linhas de nota", async () => {
+    const { rows } = await db.query<{
+      product_name: string;
+      purchase_count: number;
+      total_quantity: string;
+      total_spent: string;
+      avg_unit_price: string;
+    }>(TOP_REPEAT_PRODUCTS, [CASA, ANO, 10]);
+
+    assert.deepEqual(
+      rows.map((row) => [row.product_name, row.purchase_count]),
+      [
+        ["Leite", 3],
+        // empate em duas compras: desempata pelo que custou mais
+        ["Arroz", 2],
+        ["Cafe", 2],
+      ],
+    );
+
+    const leite = rows[0];
+    assert.equal(Number(leite.total_quantity), 5);
+    assert.equal(Number(leite.total_spent), 21);
+    // (4 + 4 + 5) / 3
+    assert.equal(Number(leite.avg_unit_price), 4.33);
+  });
+
+  test("TOP_REPEAT_PRODUCTS deixa de fora o que so foi comprado uma vez", async () => {
+    // Janela de marco: o arroz de fevereiro fica de fora e o produto perde a
+    // reincidencia.
+    const { rows } = await db.query<{ product_name: string }>(TOP_REPEAT_PRODUCTS, [
+      CASA,
+      MARCO[0],
+      10,
+    ]);
+
+    assert.deepEqual(
+      rows.map((row) => row.product_name),
+      ["Leite", "Cafe"],
+    );
+  });
+
+  test("PRICE_BY_STORE devolve a media de cada produto em cada mercado", async () => {
+    const { rows } = await db.query<{
+      product_name: string;
+      store_name: string;
+      avg_unit_price: string;
+      purchase_count: number;
+    }>(PRICE_BY_STORE, [CASA, ANO]);
+
+    const leiteBarato = rows.find(
+      (row) => row.product_name === "Leite" && row.store_name === "Mercado Barato",
+    )!;
+
+    assert.equal(Number(leiteBarato.avg_unit_price), 4);
+    assert.equal(leiteBarato.purchase_count, 2);
+
+    const leiteCaro = rows.find(
+      (row) => row.product_name === "Leite" && row.store_name === "Mercado Caro",
+    )!;
+    assert.equal(Number(leiteCaro.avg_unit_price), 5);
+  });
+
+  test("o resultado do PRICE_BY_STORE alimenta a comparacao de data.ts", async () => {
+    const { rows } = await db.query<Record<string, unknown>>(PRICE_BY_STORE, [
+      CASA,
+      ANO,
+    ]);
+
+    // O driver de producao ja converte numeric para number (lib/db.ts); no
+    // PGlite a conversao e feita aqui.
+    const prices = rows.map((row) => ({
+      product_id: String(row.product_id),
+      product_name: String(row.product_name),
+      store_key: String(row.store_key),
+      store_name: String(row.store_name),
+      avg_unit_price: Number(row.avg_unit_price),
+      purchase_count: Number(row.purchase_count),
+    }));
+
+    const comparisons = comparePrices(prices);
+    assert.deepEqual(
+      comparisons.map((row) => row.productName),
+      ["Cafe", "Leite", "Arroz"],
+    );
+    assert.equal(comparisons[0].cheapestStore, "Mercado Barato");
+    assert.equal(comparisons[0].difference, 1, "30 e o dobro de 15");
+
+    // O arroz e o unico em que o mercado caro ganha.
+    const arroz = comparisons.find((row) => row.productName === "Arroz")!;
+    assert.equal(arroz.cheapestStore, "Mercado Caro");
+
+    const ranking = rankStoresByPrice(prices);
+    assert.equal(ranking[0].storeName, "Mercado Barato");
+    assert.equal(ranking[0].wins, 2);
+    assert.equal(ranking[0].compared, 3);
   });
 });
