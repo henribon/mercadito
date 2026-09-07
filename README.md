@@ -8,6 +8,8 @@ direto do QR Code do cupom fiscal (NFC-e de São Paulo).
 - **Última vez comprado** — cada produto guarda data, preço e frequência.
 - **Lembrete de reposição** — marque um produto como "compramos sempre" e ele
   reaparece na lista quando passa do intervalo de costume.
+- **Resumo do mês** — quanto saiu, em quais mercados, onde cada produto sai mais
+  barato e o que mais se repete na despesa.
 - **Entrar com 4 dígitos** — depois do primeiro acesso por e-mail, cada um cria
   o próprio código e abre o app sem esperar link nenhum.
 
@@ -154,10 +156,11 @@ produtos que já existem no catálogo mostrando quando foram comprados pela últ
 vez e por quanto — assim vocês não criam "leite", "Leite" e "leite integral"
 como três coisas diferentes.
 
-**Compraram.** Na aba *Escanear*, leia o QR Code no rodapé do cupom. O app
-consulta a SEFAZ, lista os itens e mostra a qual produto cada linha será ligada.
-Você confere, ajusta o que estiver errado e salva. Tudo que estava na lista e
-apareceu na nota sai da lista automaticamente.
+**Compraram.** Na aba *Escanear*, aponte a câmera para o QR Code no rodapé do
+cupom — não há botão de capturar, a leitura acontece sozinha assim que o código
+aparece no quadro. O app consulta a SEFAZ, lista os itens e mostra a qual produto
+cada linha será ligada. Você confere, ajusta o que estiver errado e salva. Tudo
+que estava na lista e apareceu na nota sai da lista automaticamente.
 
 **O app aprende.** Ao confirmar que `LEITE INTEG ITALAC 1L` é o produto
 "Leite integral", esse apelido fica salvo. Na próxima nota do mesmo mercado o
@@ -166,6 +169,10 @@ casamento é automático.
 **Reposição.** Na aba *Produtos*, abra um item e ligue *Compramos sempre*. O
 intervalo já vem preenchido com a média real do seu histórico. Quando passar
 desse prazo, o produto aparece em **Hora de repor** no topo da lista.
+
+**No fim do mês.** A aba *Resumo* mostra o total gasto e a variação em relação ao
+mês anterior, quanto foi para cada mercado, em quais produtos cada mercado sai
+mais barato e o que mais se repete na despesa.
 
 ---
 
@@ -216,6 +223,21 @@ segundos, mas só com a aba visível, e sempre ao voltar para ela. Para uma list
 de duas pessoas isso é imperceptível e gasta menos bateria que manter um
 WebSocket aberto. Está em [`src/components/AppProvider.tsx`](src/components/AppProvider.tsx).
 
+**A câmera pede resolução, não proximidade.** O padrão do `getUserMedia` é
+640x480, e o QR da NFC-e é denso demais para isso: os módulos somem antes de o
+código caber na tela, e o único jeito de ler seria chegar tão perto que a lente
+não consegue mais focar. O app pede 1920x1080 e foco contínuo, e faz a leitura
+quadro a quadro em vez de esperar meio segundo entre tentativas — assim o cupom
+é lido a um palmo de distância, onde a câmera foca sem esforço. Onde existe
+`BarcodeDetector` nativo (Chrome no Android) ele é usado; no resto, o ZXing
+decodifica só o quadrado que aparece na tela. Está em
+[`src/lib/qr-camera.ts`](src/lib/qr-camera.ts).
+
+**O mês começa no celular, não no servidor.** O resumo recebe as datas de início
+e fim já prontas do cliente ([`monthWindow`](src/lib/data.ts)). Se o recorte
+fosse feito no servidor, que roda em UTC, a compra das 22h do dia 31 cairia no
+mês seguinte. Quem sabe onde o mês começa é o aparelho de quem está olhando.
+
 **SQL num módulo próprio.** As consultas não triviais ficam em
 [`src/lib/sql.ts`](src/lib/sql.ts) em vez de embutidas nas actions, para que os
 testes executem exatamente o SQL que roda em produção.
@@ -254,7 +276,7 @@ estrutura `NfceReceipt` já é agnóstica de estado.
 npm test
 ```
 
-São 84 testes em quatro frentes:
+São 111 testes em cinco frentes:
 
 - **Parsing e casamento de nomes** — HTML da SEFAZ, números e datas em formato
   brasileiro, validação da chave de acesso, similaridade de nomes de produto.
@@ -263,10 +285,14 @@ São 84 testes em quatro frentes:
 - **Código de 4 dígitos** — o par aparelho + código: hash e conferência, cookie
   de outro aparelho, código de quem já removeu o dele, e as tentativas até o
   aparelho perder a confiança.
+- **Resumo de gastos** — o recorte do mês no fuso local (incluindo a virada do
+  ano), a comparação de preço entre mercados e o placar de quem é mais barato.
+  Junto vai a geometria do recorte da câmera.
 - **Banco de dados** — o schema e as consultas de produção rodam contra um
   Postgres real ([PGlite](https://pglite.dev), Postgres compilado para WASM),
   sem precisar de banco remoto. Cobre a matemática do `product_stats`, o índice
-  que impede item duplicado na lista, os cascades e o isolamento entre casas.
+  que impede item duplicado na lista, os cascades, o isolamento entre casas e as
+  agregações do resumo.
 
 ```bash
 npm run typecheck
@@ -282,6 +308,7 @@ src/
     page.tsx              Lista: pendentes, sugestões de reposição, adicionar
     escanear/             Câmera, consulta à SEFAZ e conferência da nota
     historico/            Compras e detalhe de cada nota
+    resumo/               Gasto do mês, mercados, preços e reincidência
     produtos/             Catálogo, recorrência, código de convite, código de acesso
     api/auth/[...all]/    Rotas do Better Auth
     api/nfce/             Proxy autenticado para o portal da SEFAZ
@@ -298,8 +325,9 @@ src/
     nfce/qr.ts            Interpreta o conteúdo do QR e valida a chave
     nfce/parse.ts         Extrai itens e totais do HTML da SEFAZ
     normalize.ts          Normalização e similaridade de nomes de produto
-    data.ts               Regras puras: recorrência e sugestões
+    qr-camera.ts          Constraints da câmera e leitura do QR (nativo/ZXing)
+    data.ts               Regras puras: recorrência, sugestões e comparação de preços
 neon/schema.sql           Tabelas, índices e a view de estatísticas
 scripts/db-setup.mjs      Aplica o schema no banco (npm run db:setup)
-tests/                    Parser, normalização, códigos de acesso e banco (PGlite)
+tests/                    Parser, normalização, acesso, resumo e banco (PGlite)
 ```

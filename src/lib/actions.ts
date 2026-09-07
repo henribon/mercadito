@@ -12,6 +12,7 @@ import {
   INSERT_HOUSEHOLD,
   INSERT_MEMBER,
   PENDING_ITEMS,
+  PRICE_BY_STORE,
   PRODUCTS_WITH_STATS,
   PRODUCT_BY_ID_IN_HOUSEHOLD,
   PRODUCT_BY_NORM,
@@ -19,10 +20,19 @@ import {
   PURCHASE_BY_ID,
   PURCHASE_ITEMS,
   PURCHASE_SUMMARIES,
+  SPEND_BY_STORE,
+  SPEND_TOTAL,
+  TOP_REPEAT_PRODUCTS,
   UPSERT_PRODUCT,
 } from "./sql";
 import { getMembership, requireMembership, requireUser } from "./session";
-import type { ItemResolution } from "./data";
+import { comparePrices, rankStoresByPrice } from "./data";
+import type {
+  ItemResolution,
+  PriceComparison,
+  SpendWindow,
+  StorePriceScore,
+} from "./data";
 import type { NfceReceipt } from "./nfce/parse";
 import type {
   AppSnapshot,
@@ -32,6 +42,9 @@ import type {
   Product,
   ProductWithStats,
   Purchase,
+  RepeatProduct,
+  StorePrice,
+  StoreSpend,
   PurchaseItem,
   PurchaseSummary,
 } from "./types";
@@ -473,4 +486,73 @@ export async function importPurchase(
 
     return { purchaseId, itemsSaved: resolved.length, listItemsCleared };
   });
+}
+
+/* ---------------------------------------------------------------------------
+ * Resumo de gastos
+ * ------------------------------------------------------------------------- */
+
+/** Quantos produtos recorrentes a tela mostra. */
+const REPEAT_LIMIT = 12;
+
+export type SpendInsights = {
+  /** Mes escolhido. */
+  total: number;
+  purchaseCount: number;
+  /** Mesmo numero no mes anterior — null quando nao houve compra nenhuma. */
+  previousTotal: number | null;
+  stores: StoreSpend[];
+  /** Historico longo: preco e habito precisam de mais de um mes para dizer algo. */
+  repeats: RepeatProduct[];
+  cheaper: PriceComparison[];
+  storeRanking: StorePriceScore[];
+};
+
+function assertInstant(value: string, field: string): string {
+  if (Number.isNaN(Date.parse(value))) {
+    throw new Error(`Data inválida no resumo (${field}).`);
+  }
+  return value;
+}
+
+/**
+ * Tudo que a tela de resumo mostra, numa unica ida ao banco.
+ *
+ * A janela vem do cliente porque so o aparelho sabe onde o mes dele comeca (o
+ * servidor roda em UTC). Ela nao amplia acesso a nada: o `household.id` continua
+ * saindo da sessao, e as datas entram como parametro.
+ */
+export async function getSpendInsights(window: SpendWindow): Promise<SpendInsights> {
+  const { household } = await requireMembership();
+
+  const from = assertInstant(window.from, "início");
+  const to = assertInstant(window.to, "fim");
+  const previousFrom = assertInstant(window.previousFrom, "mês anterior");
+  const habitsFrom = assertInstant(window.habitsFrom, "histórico");
+
+  const [current, previous, stores, repeats, prices] = await Promise.all([
+    queryOne<{ purchase_count: number; total: number }>(SPEND_TOTAL, [
+      household.id,
+      from,
+      to,
+    ]),
+    queryOne<{ purchase_count: number; total: number }>(SPEND_TOTAL, [
+      household.id,
+      previousFrom,
+      from,
+    ]),
+    query<StoreSpend>(SPEND_BY_STORE, [household.id, from, to]),
+    query<RepeatProduct>(TOP_REPEAT_PRODUCTS, [household.id, habitsFrom, REPEAT_LIMIT]),
+    query<StorePrice>(PRICE_BY_STORE, [household.id, habitsFrom]),
+  ]);
+
+  return {
+    total: current?.total ?? 0,
+    purchaseCount: current?.purchase_count ?? 0,
+    previousTotal: previous && previous.purchase_count > 0 ? previous.total : null,
+    stores,
+    repeats,
+    cheaper: comparePrices(prices),
+    storeRanking: rankStoresByPrice(prices),
+  };
 }
