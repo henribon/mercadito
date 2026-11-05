@@ -4,7 +4,14 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { parseBrNumber, parseBrDateTime, parseNfceHtml } from "../src/lib/nfce/parse.ts";
+import {
+  parseBrNumber,
+  parseBrDateTime,
+  parseNfceHtml,
+  detectSefazError,
+  parseNfceText,
+  parseNfcePaste,
+} from "../src/lib/nfce/parse.ts";
 import { parseQrContent, isValidAccessKey } from "../src/lib/nfce/qr.ts";
 import { normalizeName, similarity, rankMatches } from "../src/lib/normalize.ts";
 
@@ -147,4 +154,131 @@ test("rankMatches ordena e corta os candidatos fracos", () => {
   assert.ok(ranked.length >= 1);
   assert.equal(ranked[0].item.name, "Leite integral");
   assert.ok(!ranked.some((r) => r.item.name === "Sabao em po"));
+});
+
+/* -------------------------------------------------------------------------- */
+/* Respostas que a SEFAZ passou a devolver em vez da nota                      */
+/* -------------------------------------------------------------------------- */
+
+const htmlBloqueio = readFileSync(join(here, "fixtures", "nfce-sp-bloqueio.html"), "utf8");
+const htmlErroQr = readFileSync(join(here, "fixtures", "nfce-sp-erro-qr.html"), "utf8");
+
+test("detectSefazError reconhece o bloqueio do portal", () => {
+  const problem = detectSefazError(htmlBloqueio);
+
+  assert.ok(problem, "a pagina de rejeicao tem de ser detectada");
+  assert.equal(problem.reason, "blocked");
+  // Antes essa pagina caia em "nao encontrei itens / o layout mudou".
+  assert.match(problem.message, /navegador/i);
+});
+
+test("detectSefazError le o erro que a pagina injeta por JavaScript", () => {
+  const problem = detectSefazError(htmlErroQr);
+
+  assert.ok(problem, "o erro do portal tem de chegar ao usuario");
+  assert.equal(problem.reason, "portal");
+  assert.match(problem.detail ?? "", /Hash QR Code inv[áa]lido/i);
+  // sem tag nem entidade sobrando no texto mostrado
+  assert.doesNotMatch(problem.message, /<\/?br|<li|&#\d+;/i);
+});
+
+test("detectSefazError nao inventa erro numa nota boa", () => {
+  assert.equal(detectSefazError(html), null);
+});
+
+test("detectSefazError ignora o texto dos <script> da pagina", () => {
+  // "erro" solto dentro de script nao e mensagem para o usuario
+  const comScript =
+    "<html><body><script>var msgErro = 'erro';</script><p>Nota normal</p></body></html>";
+
+  assert.equal(detectSefazError(comScript), null);
+});
+
+test("parseQrContent preserva o + do payload de contingencia", () => {
+  // digVal vem em base64 e pode trazer "+"; URLSearchParams viraria espaco
+  const raw =
+    "https://www.nfce.fazenda.sp.gov.br/qrcode?p=35240612345678000190650010000012341234567897|2|1|" +
+    "20240612193341|70.29|2.13|aB+cD/efGh=|000001|abcdef0123456789";
+  const result = parseQrContent(raw);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  assert.ok(result.payload.includes("aB+cD/efGh="), "o + tem de sobreviver");
+  assert.match(result.consultaUrl, /aB%2BcD/);
+  assert.doesNotMatch(result.consultaUrl, /aB%20cD/);
+});
+
+/* -------------------------------------------------------------------------- */
+/* Leitura do texto colado da pagina                                          */
+/* -------------------------------------------------------------------------- */
+
+const colado = readFileSync(join(here, "fixtures", "nfce-sp-colado.txt"), "utf8");
+
+test("parseNfceText le a nota colada igual ao parser de HTML", () => {
+  const doTexto = parseNfceText(colado);
+  const doHtml = parseNfceHtml(html);
+
+  assert.equal(doTexto.storeName, doHtml.storeName);
+  assert.equal(doTexto.storeCnpj, doHtml.storeCnpj);
+  assert.equal(doTexto.accessKey, doHtml.accessKey);
+  assert.equal(doTexto.purchasedAt, doHtml.purchasedAt);
+  assert.equal(doTexto.totalAmount, doHtml.totalAmount);
+  assert.equal(doTexto.discount, doHtml.discount);
+  assert.equal(doTexto.paidAmount, doHtml.paidAmount);
+  assert.deepEqual(doTexto.items, doHtml.items);
+});
+
+test("parseNfceText acha os itens com o valor da linha em outra linha", () => {
+  // alguns navegadores copiam cada celula da tabela numa linha
+  const quebrado = colado.split("\t").join("\n");
+  const receipt = parseNfceText(quebrado);
+
+  assert.equal(receipt.items.length, 4);
+
+  const [arroz, , banana] = receipt.items;
+  assert.equal(arroz.description, "ARROZ TIO JOAO T1 5KG");
+  assert.equal(arroz.totalPrice, 27.9);
+  assert.equal(banana.quantity, 1.235);
+  assert.equal(banana.unit, "KG");
+  assert.equal(banana.totalPrice, 9.87);
+});
+
+test("parseNfceText nao confunde o menu do site com o nome do mercado", () => {
+  const receipt = parseNfceText(colado);
+
+  assert.equal(receipt.storeName, "SUPERMERCADO MODELO LTDA");
+});
+
+test("parseNfceText confere o digito verificador da chave colada", () => {
+  // o cupom tras varios numeros longos; so a chave real passa no modulo 11
+  const comRuido =
+    "1111111111111111111111111111111111111111111\n" +
+    "99999999999999999999999999999999999999999999\n" +
+    colado;
+  const receipt = parseNfceText(comRuido);
+
+  assert.equal(receipt.accessKey, "35240612345678000190650010000012341234567897");
+});
+
+test("parseNfceText devolve nota vazia quando o texto nao e uma nota", () => {
+  const receipt = parseNfceText("qualquer coisa colada por engano");
+
+  assert.equal(receipt.items.length, 0);
+  assert.equal(receipt.accessKey, null);
+  assert.equal(receipt.totalAmount, null);
+});
+
+test("parseNfcePaste aceita tanto o HTML quanto o texto da pagina", () => {
+  assert.equal(parseNfcePaste(html).items.length, 4);
+  assert.equal(parseNfcePaste(colado).items.length, 4);
+});
+
+test("parseNfcePaste cai para o texto quando o HTML nao tem os itens", () => {
+  // pagina copiada com a marcacao do site, mas sem a tabela do portal
+  const hibrido = `<div class="pagina"><p>${colado.split("\n").join("</p><p>")}</p></div>`;
+  const receipt = parseNfcePaste(hibrido);
+
+  assert.equal(receipt.items.length, 4);
+  assert.equal(receipt.storeName, "SUPERMERCADO MODELO LTDA");
 });

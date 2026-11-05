@@ -1,0 +1,76 @@
+<!--
+  Trecho reduzido de uma resposta real da Consulta Publica por QR Code da
+  SEFAZ-SP (Versao do Site 1.2.6.0-P19, capturada em 05/11/2026).
+
+  O que importa aqui: a pagina responde 200 com o layout normal, os divs de
+  mensagem vem VAZIOS no HTML e o texto do erro e injetado por JavaScript
+  inline no fim do documento. Nenhum texto de erro aparece no corpo renderado.
+-->
+<!DOCTYPE html>
+<html lang="pt-br" dir="ltr">
+<head id="Head">
+<title>
+	Consulta NFC-e QR Code - Secretaria da Fazenda - Governo do Estado de São Paulo
+</title>
+<meta charset="utf-8" />
+</head>
+<body>
+<form method="post" action="./ConsultaQRCode.aspx?p=35240612345678000190650010000012341234567897%7C2%7C1%7C1%7Cabcdef0123456789" id="ctl00">
+
+        <div id="UpdatePanelMensagens">
+            <input type="hidden" name="ctl00$hdfMsgConfirmacao" id="hdfMsgConfirmacao" />
+        </div>
+
+        <div id="divSucessoMaster" title="Sucesso" style="display: none">
+            <strong><span id="spnSucessoMaster" class="corTextoMensagem"></span></strong>
+        </div>
+
+        <div id="divAlertaMaster" title="Alerta" style="display: none">
+            <span id="spnAlertaMaster" class="corTextoMensagem"></span>
+        </div>
+
+        <div id="divAlertaProsseguirMaster" title="Alerta" style="display: none">
+            <span id="spnAlertaProsseguirMaster" class="corTextoMensagem"></span>
+        </div>
+
+        <div id="divErroMaster" title="Erro" style="display: none">
+            <strong><span id="spnErroMaster" class="corTextoErro"></span></strong>
+        </div>
+
+        <div id="divErroProsseguirMaster" title="Erro" style="display: none">
+            <strong><span id="spnErroProsseguirMaster" class="corTextoErro"></span></strong>
+        </div>
+
+        <!-- CONTAINER -->
+        <section id="ConteudoPrincipal" class="container" role="main">
+            
+    <h1></h1>
+    <div class="box-padrao" style="margin-left:360px; margin-bottom:0">
+        <h3 style="text-align: left">Consulta Pública por QR Code</h3>
+    </div>
+
+        </section>
+        <!-- END CONTAINER -->
+
+        <div id="footer" class="naoImprimir">
+            <div id="tf_rodape_versao" style="font-size: 10px; color: gray; float:right">
+                Versão do Site: 1.2.6.0-P19
+            </div>
+            <footer role="contentinfo" class="naoImprimir">
+                <div class="naoImprimir">
+                    <p>Secretaria da Fazenda do Estado de São Paulo</p>
+                </div>
+            </footer>
+        </div>
+
+<script type="text/javascript">
+//<![CDATA[
+$('#spnErroProsseguirMaster').html('<ul><li>Problemas na consulta via QR Code – QR Code inválido. Erro(s): </br>- Hash QR Code inválido</li></ul>'); $(function(){openDialog('divErroProsseguirMaster');});//]]>
+</script>
+</form>
+
+    <script src='/NFCeConsultaPublica/Scripts/scripts.js'></script>
+    <noscript>Seu navegador não da suporte a JavaScript. Por favor atualize-o!</noscript>
+
+</body>
+</html>

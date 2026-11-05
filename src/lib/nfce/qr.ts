@@ -57,20 +57,26 @@ export function isValidAccessKey(key: string): boolean {
   return check === Number(key[43]);
 }
 
-/** Extrai o valor do parametro `p` de uma URL, ou o texto cru se nao houver. */
+/**
+ * Extrai o valor do parametro `p` de uma URL, ou o texto cru se nao houver.
+ *
+ * Pegamos o valor cru e decodificamos a mao em vez de usar URLSearchParams:
+ * ele trata "+" como espaco, e no QR de contingencia o campo digVal vem em
+ * base64 e pode conter "+". Um unico caractere trocado invalida o hash e a
+ * SEFAZ recusa a consulta.
+ */
 function extractPayload(raw: string): string {
   const text = raw.trim();
-
-  try {
-    const url = new URL(text);
-    const p = url.searchParams.get("p");
-    if (p) return p;
-  } catch {
-    // nao e URL absoluta; segue para os fallbacks
-  }
-
   const match = text.match(/[?&]p=([^&\s]+)/i);
-  if (match) return decodeURIComponent(match[1]);
+
+  if (match) {
+    try {
+      return decodeURIComponent(match[1]);
+    } catch {
+      // payload com % solto: melhor repassar como veio do que perder a nota
+      return match[1];
+    }
+  }
 
   return text;
 }
