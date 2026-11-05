@@ -28,7 +28,7 @@ app de graça.
 | Autenticação | Better Auth, magic link por e-mail |
 | Acesso a dados | Server Actions — o banco nunca é exposto ao navegador |
 | Leitura do QR | `@zxing/browser` (carregado sob demanda) |
-| Leitura da nota | Rota `/api/nfce` no servidor + `cheerio` |
+| Leitura da nota | Rota `/api/nfce` no servidor + `cheerio` (QR Code ou página colada) |
 
 ---
 
@@ -162,6 +162,14 @@ aparece no quadro. O app consulta a SEFAZ, lista os itens e mostra a qual produt
 cada linha será ligada. Você confere, ajusta o que estiver errado e salva. Tudo
 que estava na lista e apareceu na nota sai da lista automaticamente.
 
+**Quando a SEFAZ recusa a consulta.** Desde novembro/2026 o portal bloqueia boa
+parte das consultas automáticas (veja [Sobre a leitura da nota
+fiscal](#sobre-a-leitura-da-nota-fiscal)). Quando isso acontece o app mostra o
+motivo e um link para abrir a nota no navegador — lá ela carrega normalmente.
+Selecione tudo (`Ctrl+A` no desktop, toque longo → *Selecionar tudo* no
+celular), copie e cole em **Ou cole o conteúdo da nota**: o app extrai os itens
+do texto e segue para a mesma tela de conferência.
+
 **O app aprende.** Ao confirmar que `LEITE INTEG ITALAC 1L` é o produto
 "Leite integral", esse apelido fica salvo. Na próxima nota do mesmo mercado o
 casamento é automático.
@@ -258,6 +266,41 @@ requisição.
 Se a câmera não abrir, dá para colar a URL da nota ou a chave de 44 dígitos no
 campo abaixo do botão.
 
+**Mudança no portal (novembro/2026):** a Consulta Pública por QR Code passou a
+ficar atrás de um WAF. Para requisição que não vem de um navegador de verdade
+ele responde **HTTP 200 com uma página de rejeição** de ~250 bytes
+(`Request Rejected` + `support ID`) em vez da nota — ou seja, o status não
+denuncia nada, só o corpo. Na prática a consulta automática feita pelo servidor
+(o que a rota `/api/nfce` faz) falha na maior parte das tentativas, inclusive
+rodando da máquina de casa; não é questão do IP da Vercel.
+
+Quando a requisição passa, o portal também mudou de forma: o texto do erro **não
+vem no HTML**. Os `div`s de mensagem chegam vazios e o erro é injetado por
+JavaScript inline no fim da página:
+
+```js
+$('#spnErroProsseguirMaster').html('<ul><li>Problemas na consulta via QR Code …</li></ul>');
+```
+
+`detectSefazError` reconhece os dois casos e mostra o motivo real ao usuário,
+com link para abrir a nota no navegador (lá a página carrega normal). Antes,
+qualquer um dos dois caía na mensagem genérica "não encontrei itens, talvez o
+layout tenha mudado".
+
+O caminho que continua funcionando é o usuário copiar a página aberta no próprio
+navegador e colar no app: `POST /api/nfce` aceita `{ paste }` e
+`parseNfcePaste` lê tanto o HTML quanto o texto renderizado. No texto não há
+classes para ancorar, então `parseNfceText` se apoia nos rótulos que o portal
+imprime (`(Código: …)`, `Qtde.:`, `UN:`, `Vl. Unit.:`), aceita o valor da linha
+na mesma linha ou na seguinte (depende de como o navegador copia a tabela) e
+confere o dígito verificador da chave para não confundi-la com outro número
+longo da página.
+
+**Por que não um navegador headless:** o bloqueio é um desafio JavaScript — passar
+por ele é justamente o que o portal decidiu barrar, além de frágil e caro de
+hospedar. Se um dia a leitura de um toque for necessária de volta, o caminho
+limpo é uma API de consulta de NFC-e de terceiro.
+
 **Limitação conhecida:** o portal da SEFAZ é uma aplicação ASP.NET antiga e o
 HTML pode mudar sem aviso. O parser em [`src/lib/nfce/parse.ts`](src/lib/nfce/parse.ts)
 é tolerante (seletores com fallback para regex) e a tela de conferência sempre
@@ -323,7 +366,7 @@ src/
     pin-plugin.ts         Endpoints /api/auth/codigo/* (plugin do Better Auth)
     email.ts              Envio do link via SMTP
     nfce/qr.ts            Interpreta o conteúdo do QR e valida a chave
-    nfce/parse.ts         Extrai itens e totais do HTML da SEFAZ
+    nfce/parse.ts         Extrai itens e totais do HTML ou do texto colado
     normalize.ts          Normalização e similaridade de nomes de produto
     qr-camera.ts          Constraints da câmera e leitura do QR (nativo/ZXing)
     data.ts               Regras puras: recorrência, sugestões e comparação de preços

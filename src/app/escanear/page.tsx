@@ -31,7 +31,11 @@ export default function EscanearPage() {
 
   const [mode, setMode] = useState<Mode>("idle");
   const [error, setError] = useState<string | null>(null);
+  /** Link da nota na SEFAZ quando a consulta falha: no navegador ela abre. */
+  const [errorLink, setErrorLink] = useState<string | null>(null);
   const [manual, setManual] = useState("");
+  /** Texto da pagina da nota, copiado do navegador. */
+  const [paste, setPaste] = useState("");
 
   const [receipt, setReceipt] = useState<NfceReceipt | null>(null);
   const [sourceUrl, setSourceUrl] = useState<string | null>(null);
@@ -45,22 +49,25 @@ export default function EscanearPage() {
     void getAliases().then(setAliases).catch(() => {});
   }, [household]);
 
-  const consult = useCallback(
-    async (qr: string) => {
+  /** `qr` consulta a SEFAZ; `paste` le a pagina que o usuario copiou. */
+  const send = useCallback(
+    async (input: { qr?: string; paste?: string }) => {
       setMode("loading");
       setError(null);
+      setErrorLink(null);
 
       try {
         const response = await fetch("/api/nfce", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ qr }),
+          body: JSON.stringify(input),
         });
 
         const payload = await response.json();
 
         if (!response.ok) {
           setError(payload.error ?? "Não consegui ler essa nota.");
+          setErrorLink(typeof payload.sourceUrl === "string" ? payload.sourceUrl : null);
           setMode("idle");
           return;
         }
@@ -76,6 +83,8 @@ export default function EscanearPage() {
     },
     [products, aliases],
   );
+
+  const consult = useCallback((qr: string) => send({ qr }), [send]);
 
   async function save() {
     if (!receipt) return;
@@ -100,7 +109,9 @@ export default function EscanearPage() {
     setResolutions([]);
     setDone(null);
     setError(null);
+    setErrorLink(null);
     setManual("");
+    setPaste("");
   }
 
   /* ---------------------------------------------------------------------- */
@@ -157,7 +168,7 @@ export default function EscanearPage() {
       ) : mode === "loading" ? (
         <div className="card flex flex-col items-center gap-3 px-5 py-14">
           <IconSpinner size={24} className="text-muted" />
-          <p className="text-sm text-muted">Consultando a SEFAZ…</p>
+          <p className="text-sm text-muted">Lendo a nota…</p>
         </div>
       ) : (
         <>
@@ -165,6 +176,7 @@ export default function EscanearPage() {
             type="button"
             onClick={() => {
               setError(null);
+              setErrorLink(null);
               setMode("camera");
             }}
             className="btn-primary w-full"
@@ -176,7 +188,20 @@ export default function EscanearPage() {
           {error && (
             <div className="card mt-4 flex gap-3 p-4">
               <IconAlert size={18} className="mt-0.5 shrink-0 text-warn" />
-              <p className="text-sm text-muted">{error}</p>
+              <div>
+                <p className="text-sm text-muted">{error}</p>
+
+                {errorLink && (
+                  <a
+                    href={errorLink}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-2 inline-block text-sm font-medium text-accent underline"
+                  >
+                    Abrir a nota no site da SEFAZ
+                  </a>
+                )}
+              </div>
             </div>
           )}
 
@@ -203,6 +228,33 @@ export default function EscanearPage() {
             </div>
             <p className="mt-2 text-xs text-muted">
               Funciona também com a chave de 44 dígitos impressa no cupom.
+            </p>
+          </div>
+
+          <div className="mt-6">
+            <label htmlFor="colado" className="label">
+              Ou cole o conteúdo da nota
+            </label>
+            <textarea
+              id="colado"
+              value={paste}
+              onChange={(event) => setPaste(event.target.value)}
+              rows={4}
+              placeholder="Abra a nota no navegador, selecione tudo, copie e cole aqui"
+              className="field h-auto resize-y py-2 text-sm"
+            />
+            <button
+              type="button"
+              disabled={!paste.trim()}
+              onClick={() => send({ paste })}
+              className="btn-ghost mt-2 w-full"
+            >
+              Ler o texto colado
+            </button>
+            <p className="mt-2 text-xs text-muted">
+              A SEFAZ bloqueia a consulta automática, mas a nota abre normalmente
+              no seu navegador. Copiando a página inteira o app extrai os itens
+              do mesmo jeito.
             </p>
           </div>
         </>

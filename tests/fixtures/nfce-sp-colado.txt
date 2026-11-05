@@ -1,0 +1,20 @@
+Secretaria da Fazenda e Planejamento
+Nota Fiscal de Consumidor Eletrônica - NFC-e
+SUPERMERCADO MODELO LTDA
+CNPJ: 12.345.678/0001-90
+Av. Brasil, 1000, Centro, SAO PAULO, SP
+ARROZ TIO JOAO T1 5KG (Código: 000123) Qtde.:1 UN: UN Vl. Unit.:  27,90	27,90
+LEITE INTEG ITALAC 1L (Código: 000456) Qtde.:6 UN: UN Vl. Unit.:  4,49	26,94
+BANANA NANICA KG (Código: 000789) Qtde.:1,235 UN: KG Vl. Unit.:  7,99	9,87
+DET LIQ YPE NEUTRO 500ML (Código: 001011) Qtde.:2 UN: UN Vl. Unit.:  2,79	5,58
+Qtd. total de itens	4
+Valor total R$	70,29
+Desconto R$	1,50
+Valor a pagar R$	68,79
+Informação do Consumidor
+Número: 123456 Série: 001 Emissão: 12/06/2024 19:33:41
+Chave de acesso
+3524 0612 3456 7800 0190 6500 1000 0012 3412 3456 7897
+Consulte pela Chave de Acesso em www.nfce.fazenda.sp.gov.br
+Secretaria da Fazenda do Estado de São Paulo
+Av. Rangel Pestana, 300 - São Paulo / SP - 01017-911 - PABX (11)3243-3400
