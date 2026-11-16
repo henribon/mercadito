@@ -226,6 +226,64 @@ export const DELETE_DEVICES_FOR_USER = `
 `;
 
 /* ---------------------------------------------------------------------------
+ * Senha (e-mail + senha, em qualquer aparelho)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * $1 = user_id, $2 = password_hash
+ * Trocar a senha e o mesmo que criar — e quem troca ja provou quem e, entao as
+ * tentativas erradas acumuladas e a tranca saem junto.
+ */
+export const UPSERT_USER_PASSWORD = `
+  insert into user_passwords (user_id, password_hash)
+  values ($1, $2)
+  on conflict (user_id) do update
+    set password_hash = excluded.password_hash,
+        failed_count = 0, locked_until = null, updated_at = now()
+`;
+
+/** $1 = user_id */
+export const USER_HAS_PASSWORD = `
+  select 1 as ok from user_passwords where user_id = $1
+`;
+
+/** $1 = user_id */
+export const DELETE_USER_PASSWORD = `
+  delete from user_passwords where user_id = $1
+`;
+
+/** $1 = email, ja em minusculas. So devolve quem criou senha. */
+export const PASSWORD_BY_EMAIL = `
+  select p.user_id, p.password_hash, p.locked_until
+    from user_passwords p
+    join "user" u on u.id = p.user_id
+   where lower(u.email) = $1
+`;
+
+/**
+ * $1 = user_id, $2 = limite de erros, $3 = minutos de tranca
+ *
+ * O contador nao zera quando a tranca vence: depois do primeiro bloqueio, cada
+ * erro novo tranca de novo na hora. So acertar a senha (ou troca-la) zera.
+ */
+export const PASSWORD_FAILED = `
+  update user_passwords
+     set failed_count = failed_count + 1,
+         locked_until = case
+           when failed_count + 1 >= $2::int then now() + make_interval(mins => $3::int)
+           else locked_until
+         end
+   where user_id = $1
+  returning failed_count, locked_until
+`;
+
+/** $1 = user_id */
+export const PASSWORD_USED = `
+  update user_passwords set failed_count = 0, locked_until = null
+   where user_id = $1
+`;
+
+/* ---------------------------------------------------------------------------
  * Resumo de gastos
  *
  * As janelas de tempo chegam prontas do cliente ($2 e $3, ISO). O servidor roda
@@ -311,4 +369,96 @@ export const PRICE_BY_STORE = `
      and i.unit_price > 0
    group by pr.id, pr.name, 3
    order by pr.name, avg_unit_price
+`;
+
+/* ---------------------------------------------------------------------------
+ * Relatorio mensal por e-mail
+ *
+ * As duas consultas trazem as linhas cruas de um ano e a conta e feita em
+ * report.ts: metade do relatorio depende do dia *local* da compra, e isso e
+ * mais facil de acertar (e de testar) fora do SQL.
+ * ------------------------------------------------------------------------- */
+
+/** $1 = household_id, $2 = inicio do historico, $3 = fim (exclusivo) */
+export const REPORT_PURCHASES = `
+  select p.id,
+         coalesce(p.store_cnpj, upper(coalesce(btrim(p.store_name), ''))) as store_key,
+         coalesce(nullif(btrim(p.store_name), ''), 'Sem identificação') as store_name,
+         p.purchased_at,
+         coalesce(p.paid_amount, p.total_amount, 0) as total,
+         coalesce(p.discount, 0) as discount
+    from purchases p
+   where p.household_id = $1
+     and p.purchased_at >= $2 and p.purchased_at < $3
+   order by p.purchased_at, p.id
+`;
+
+/**
+ * $1 = household_id, $2 = inicio do historico, $3 = fim (exclusivo)
+ *
+ * `left join` em products de proposito: linha de nota que ninguem ligou a um
+ * produto do catalogo ainda e dinheiro gasto, e entra com a descricao da nota.
+ */
+export const REPORT_ITEMS = `
+  select i.purchase_id,
+         i.product_id,
+         coalesce(pr.name, i.raw_description) as name,
+         coalesce(nullif(btrim(i.unit), ''), pr.unit, 'UN') as unit,
+         i.quantity,
+         i.unit_price,
+         coalesce(i.total_price, round((i.quantity * i.unit_price)::numeric, 2)) as total_price,
+         pu.purchased_at,
+         coalesce(pu.store_cnpj, upper(coalesce(btrim(pu.store_name), ''))) as store_key,
+         coalesce(nullif(btrim(pu.store_name), ''), 'Sem identificação') as store_name
+    from purchase_items i
+    join purchases pu on pu.id = i.purchase_id
+    left join products pr on pr.id = i.product_id
+   where pu.household_id = $1
+     and pu.purchased_at >= $2 and pu.purchased_at < $3
+   order by pu.purchased_at, pu.id, i.position
+`;
+
+/** Todo mundo que quer o relatorio, com a casa de cada um. */
+export const REPORT_RECIPIENTS = `
+  select m.household_id,
+         h.name  as household_name,
+         u.id    as user_id,
+         u.email as email,
+         coalesce(nullif(btrim(m.display_name), ''), u.name) as name
+    from household_members m
+    join households h on h.id = m.household_id
+    join "user" u on u.id = m.user_id
+   where m.monthly_report
+   order by m.household_id, m.joined_at
+`;
+
+/**
+ * $1 = household_id, $2 = user_id, $3 = mes (primeiro dia, yyyy-mm-dd)
+ *
+ * Reserva o envio *antes* de mandar o e-mail: se o agendador disparar duas
+ * vezes ao mesmo tempo, so um dos dois recebe a linha de volta e envia.
+ */
+export const CLAIM_REPORT_DELIVERY = `
+  insert into report_deliveries (household_id, user_id, month)
+  values ($1, $2, $3::date)
+  on conflict do nothing
+  returning sent_at
+`;
+
+/** $1 = household_id, $2 = user_id, $3 = mes. O envio falhou: libera para a proxima tentativa. */
+export const RELEASE_REPORT_DELIVERY = `
+  delete from report_deliveries
+   where household_id = $1 and user_id = $2 and month = $3::date
+`;
+
+/** $1 = household_id, $2 = user_id */
+export const REPORT_PREFERENCE = `
+  select monthly_report from household_members
+   where household_id = $1 and user_id = $2
+`;
+
+/** $1 = household_id, $2 = user_id, $3 = recebe ou nao */
+export const SET_REPORT_PREFERENCE = `
+  update household_members set monthly_report = $3
+   where household_id = $1 and user_id = $2
 `;
