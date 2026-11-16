@@ -8,6 +8,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 
 import {
+  ACCOUNT_SETTINGS,
   CLAIM_REPORT_DELIVERY,
   DELETE_USER_PASSWORD,
   PASSWORD_BY_EMAIL,
@@ -18,6 +19,8 @@ import {
   REPORT_PREFERENCE,
   REPORT_PURCHASES,
   REPORT_RECIPIENTS,
+  SET_DISPLAY_NAME,
+  SET_REPORT_EMAIL,
   SET_REPORT_PREFERENCE,
   UPSERT_USER_PASSWORD,
   USER_HAS_PASSWORD,
@@ -1145,5 +1148,140 @@ describe("relatorio mensal", () => {
       0,
       "liberar outubro não mexe em novembro",
     );
+  });
+});
+
+describe("configuracoes de conta", () => {
+  // Casa propria: mexer no destino do relatorio aqui nao pode atrapalhar as
+  // asserções do bloco "relatorio mensal".
+  const CASA = "99999999-0000-0000-0000-000000000001";
+  const OUTRA = "99999999-0000-0000-0000-000000000002";
+
+  type Conta = {
+    display_name: string | null;
+    monthly_report: boolean;
+    report_email: string | null;
+  };
+
+  const conta = async (casa: string, user: string) =>
+    (await db.query<Conta>(ACCOUNT_SETTINGS, [casa, user])).rows[0];
+
+  const destinos = async (casa: string) =>
+    (await db.query<{ household_id: string; email: string; name: string }>(REPORT_RECIPIENTS))
+      .rows.filter((row) => row.household_id === casa)
+      .map((row) => [row.email, row.name]);
+
+  before(async () => {
+    await db.exec(`
+      insert into "user" (id, name, email) values
+        ('user-conta-1', 'Henri Conta', 'conta1@example.com'),
+        ('user-conta-2', 'Ana Conta', 'conta2@example.com'),
+        ('user-conta-3', 'Vizinho Conta', 'conta3@example.com');
+
+      insert into households (id, name, invite_code) values
+        ('${CASA}', 'Casa da conta', 'CTA001'),
+        ('${OUTRA}', 'Outra casa da conta', 'CTA002');
+
+      insert into household_members (household_id, user_id, display_name, joined_at) values
+        ('${CASA}', 'user-conta-1', null, '2026-01-01T00:00:00Z'),
+        ('${CASA}', 'user-conta-2', 'Aninha', '2026-01-02T00:00:00Z'),
+        ('${OUTRA}', 'user-conta-3', null, '2026-01-03T00:00:00Z');
+    `);
+  });
+
+  test("o schema novo aplica por cima de um banco que ja existia", async () => {
+    // E o que o `npm run db:setup` faz num app no ar: roda o arquivo inteiro de
+    // novo. Tem que ser idempotente e nao pode apagar o que ja foi gravado.
+    await db.exec(schema);
+
+    assert.equal((await conta(CASA, "user-conta-2")).display_name, "Aninha");
+  });
+
+  test("ACCOUNT_SETTINGS comeca sem destino proprio e com o relatorio ligado", async () => {
+    assert.deepEqual(await conta(CASA, "user-conta-1"), {
+      display_name: null,
+      monthly_report: true,
+      report_email: null,
+    });
+  });
+
+  test("sem destino escolhido, o relatorio vai para o e-mail de login", async () => {
+    assert.deepEqual(await destinos(CASA), [
+      ["conta1@example.com", "Henri Conta"],
+      ["conta2@example.com", "Aninha"],
+    ]);
+  });
+
+  test("SET_REPORT_EMAIL troca o destino so de quem pediu", async () => {
+    await db.query(SET_REPORT_EMAIL, [CASA, "user-conta-1", "financeiro@example.com"]);
+
+    assert.equal((await conta(CASA, "user-conta-1")).report_email, "financeiro@example.com");
+    assert.equal((await conta(CASA, "user-conta-2")).report_email, null);
+
+    assert.deepEqual(await destinos(CASA), [
+      ["financeiro@example.com", "Henri Conta"],
+      ["conta2@example.com", "Aninha"],
+    ]);
+  });
+
+  test("trocar o destino nao mexe no e-mail de login", async () => {
+    const { rows } = await db.query<{ email: string }>(
+      `select email from "user" where id = 'user-conta-1'`,
+    );
+    assert.equal(rows[0].email, "conta1@example.com");
+    assert.equal((await db.query(USER_BY_EMAIL, ["financeiro@example.com"])).rows.length, 0);
+  });
+
+  test("SET_REPORT_EMAIL com null volta para o e-mail de login", async () => {
+    await db.query(SET_REPORT_EMAIL, [CASA, "user-conta-1", null]);
+
+    assert.equal((await conta(CASA, "user-conta-1")).report_email, null);
+    assert.deepEqual((await destinos(CASA))[0], ["conta1@example.com", "Henri Conta"]);
+  });
+
+  test("destino gravado em branco conta como nao escolhido", async () => {
+    // Nao e o que o app grava (ele manda null), mas e o que evita um e-mail
+    // sem destinatario se a coluna for editada a mao.
+    await db.query(SET_REPORT_EMAIL, [CASA, "user-conta-1", "   "]);
+
+    assert.equal((await conta(CASA, "user-conta-1")).report_email, null);
+    assert.deepEqual((await destinos(CASA))[0], ["conta1@example.com", "Henri Conta"]);
+
+    await db.query(SET_REPORT_EMAIL, [CASA, "user-conta-1", null]);
+  });
+
+  test("SET_DISPLAY_NAME muda o nome que abre o relatorio", async () => {
+    await db.query(SET_DISPLAY_NAME, [CASA, "user-conta-1", "Henri"]);
+
+    assert.equal((await conta(CASA, "user-conta-1")).display_name, "Henri");
+    assert.deepEqual((await destinos(CASA))[0], ["conta1@example.com", "Henri"]);
+  });
+
+  test("SET_DISPLAY_NAME com null volta a valer o nome da conta", async () => {
+    await db.query(SET_DISPLAY_NAME, [CASA, "user-conta-2", null]);
+
+    assert.equal((await conta(CASA, "user-conta-2")).display_name, null);
+    assert.deepEqual((await destinos(CASA))[1], ["conta2@example.com", "Ana Conta"]);
+  });
+
+  test("as configuracoes nao alcancam membro de outra casa", async () => {
+    await db.query(SET_REPORT_EMAIL, [CASA, "user-conta-3", "invasor@example.com"]);
+    await db.query(SET_DISPLAY_NAME, [CASA, "user-conta-3", "Invasor"]);
+
+    assert.deepEqual(await conta(OUTRA, "user-conta-3"), {
+      display_name: null,
+      monthly_report: true,
+      report_email: null,
+    });
+    assert.equal(await conta(CASA, "user-conta-3"), undefined);
+  });
+
+  test("quem desligou o relatorio nao recebe, mesmo com destino proprio", async () => {
+    await db.query(SET_REPORT_EMAIL, [CASA, "user-conta-2", "ana.contas@example.com"]);
+    await db.query(SET_REPORT_PREFERENCE, [CASA, "user-conta-2", false]);
+
+    assert.deepEqual(await destinos(CASA), [["conta1@example.com", "Henri"]]);
+    // ...mas a escolha fica guardada para quando religar (e para o "Enviar agora").
+    assert.equal((await conta(CASA, "user-conta-2")).report_email, "ana.contas@example.com");
   });
 });

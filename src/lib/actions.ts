@@ -1,8 +1,17 @@
 "use server";
 
-import { pgErrorCode, query, queryOne, transaction } from "./db";
+import { parseDisplayName, parseReportEmail } from "./account";
+import {
+  isSchemaOutdated,
+  pgErrorCode,
+  query,
+  queryOne,
+  SCHEMA_OUTDATED_MESSAGE,
+  transaction,
+} from "./db";
 import { normalizeName, toTitleCase } from "./normalize";
 import {
+  ACCOUNT_SETTINGS,
   ADD_ITEM_BY_PRODUCT,
   ADD_PRODUCT_TO_LIST,
   ALIASES_FOR_HOUSEHOLD,
@@ -20,14 +29,20 @@ import {
   PURCHASE_BY_ID,
   PURCHASE_ITEMS,
   PURCHASE_SUMMARIES,
-  REPORT_PREFERENCE,
+  SET_DISPLAY_NAME,
+  SET_REPORT_EMAIL,
   SET_REPORT_PREFERENCE,
   SPEND_BY_STORE,
   SPEND_TOTAL,
   TOP_REPEAT_PRODUCTS,
   UPSERT_PRODUCT,
 } from "./sql";
-import { getMembership, requireMembership, requireUser } from "./session";
+import {
+  getMembership,
+  requireMembership,
+  requireUser,
+  type Membership,
+} from "./session";
 import { comparePrices, rankStoresByPrice } from "./data";
 import { isEmailConfigured } from "./email";
 import { isValidTimeZone, reportPeriod } from "./report";
@@ -563,6 +578,111 @@ export async function getSpendInsights(window: SpendWindow): Promise<SpendInsigh
 }
 
 /* ---------------------------------------------------------------------------
+ * Configuracoes de conta
+ * ------------------------------------------------------------------------- */
+
+/** O que a pessoa escolheu para si dentro da casa. */
+type AccountRow = {
+  display_name: string | null;
+  monthly_report: boolean;
+  report_email: string | null;
+};
+
+async function accountRow({ user, household }: Membership): Promise<AccountRow> {
+  const row = await queryOne<AccountRow>(ACCOUNT_SETTINGS, [household.id, user.id]);
+  return row ?? { display_name: null, monthly_report: true, report_email: null };
+}
+
+export type AccountSettings = {
+  /** O e-mail que abre o app. So leitura: e a identidade da conta. */
+  loginEmail: string;
+  /** Como a pessoa e chamada — e o nome que abre o relatorio. */
+  displayName: string;
+  /** Recebe o relatorio automatico de todo comeco de mes? */
+  reportEnabled: boolean;
+  /** Para onde o relatorio vai. Null = o e-mail de login. */
+  reportEmail: string | null;
+};
+
+/**
+ * Resultado em vez de excecao: em producao o Next apaga a mensagem de um erro
+ * lancado por Server Action, e aqui a mensagem e justamente o que a tela mostra.
+ */
+export type AccountResult =
+  | { ok: true; settings: AccountSettings }
+  | { ok: false; message: string };
+
+function accountFailure(cause: unknown): AccountResult {
+  if (isSchemaOutdated(cause)) return { ok: false, message: SCHEMA_OUTDATED_MESSAGE };
+  throw cause;
+}
+
+async function accountSettings(membership: Membership): Promise<AccountSettings> {
+  const row = await accountRow(membership);
+
+  return {
+    loginEmail: membership.user.email,
+    displayName: row.display_name?.trim() || membership.user.name?.trim() || "",
+    reportEnabled: row.monthly_report,
+    reportEmail: row.report_email,
+  };
+}
+
+export async function getAccountSettings(): Promise<AccountResult> {
+  const membership = await requireMembership();
+
+  try {
+    return { ok: true, settings: await accountSettings(membership) };
+  } catch (cause) {
+    return accountFailure(cause);
+  }
+}
+
+/** Troca o nome de quem esta pedindo. Em branco volta a valer o da conta. */
+export async function updateDisplayName(name: string): Promise<AccountResult> {
+  const membership = await requireMembership();
+
+  const parsed = parseDisplayName(name);
+  if (!parsed.ok) return parsed;
+
+  try {
+    await query(SET_DISPLAY_NAME, [
+      membership.household.id,
+      membership.user.id,
+      parsed.value,
+    ]);
+    return { ok: true, settings: await accountSettings(membership) };
+  } catch (cause) {
+    return accountFailure(cause);
+  }
+}
+
+/**
+ * Para onde vai o relatorio de quem esta pedindo. Em branco (ou o proprio
+ * e-mail de login) volta a acompanhar o e-mail da conta.
+ *
+ * Nao muda o e-mail de login: esse e a identidade no Better Auth, e troca-lo
+ * exigiria confirmar o endereco novo.
+ */
+export async function updateReportEmail(email: string): Promise<AccountResult> {
+  const membership = await requireMembership();
+
+  const parsed = parseReportEmail(email, membership.user.email);
+  if (!parsed.ok) return parsed;
+
+  try {
+    await query(SET_REPORT_EMAIL, [
+      membership.household.id,
+      membership.user.id,
+      parsed.value,
+    ]);
+    return { ok: true, settings: await accountSettings(membership) };
+  } catch (cause) {
+    return accountFailure(cause);
+  }
+}
+
+/* ---------------------------------------------------------------------------
  * Relatorio mensal por e-mail
  * ------------------------------------------------------------------------- */
 
@@ -574,14 +694,13 @@ export type ReportSettings = {
 };
 
 export async function getReportSettings(): Promise<ReportSettings> {
-  const { user, household } = await requireMembership();
+  const membership = await requireMembership();
+  const row = await accountRow(membership);
 
-  const row = await queryOne<{ monthly_report: boolean }>(REPORT_PREFERENCE, [
-    household.id,
-    user.id,
-  ]);
-
-  return { enabled: row?.monthly_report ?? true, email: user.email };
+  return {
+    enabled: row.monthly_report,
+    email: row.report_email ?? membership.user.email,
+  };
 }
 
 /** Liga ou desliga o relatorio automatico — so para quem esta pedindo. */
@@ -595,7 +714,8 @@ export type SendReportResult =
   | { ok: false; message: string };
 
 /**
- * Envia agora o relatorio de um mes, so para quem pediu.
+ * Envia agora o relatorio de um mes, so para quem pediu — no endereco que a
+ * pessoa escolheu na aba Conta.
  *
  * O mes e o fuso vem do aparelho, como no resumo: e ele que sabe onde o mes
  * comeca. Nao mexe em report_deliveries — pedir na mao nao deve impedir (nem
@@ -607,7 +727,8 @@ export async function sendReportNow(request: {
   month: number;
   timeZone: string;
 }): Promise<SendReportResult> {
-  const { user, household } = await requireMembership();
+  const membership = await requireMembership();
+  const { user, household } = membership;
 
   const { year, month, timeZone } = request;
 
@@ -632,6 +753,16 @@ export async function sendReportNow(request: {
     };
   }
 
+  let account: AccountRow;
+  try {
+    account = await accountRow(membership);
+  } catch (cause) {
+    if (isSchemaOutdated(cause)) return { ok: false, message: SCHEMA_OUTDATED_MESSAGE };
+    throw cause;
+  }
+
+  const email = account.report_email ?? user.email;
+
   const report = await loadMonthlyReport(household.id, period);
 
   if (report.purchaseCount === 0) {
@@ -641,12 +772,12 @@ export async function sendReportNow(request: {
   try {
     await deliverReport(report, {
       householdName: household.name,
-      email: user.email,
-      name: user.name,
+      email,
+      name: account.display_name?.trim() || user.name,
     });
   } catch {
     return { ok: false, message: "Não consegui enviar o e-mail. Tente de novo em instantes." };
   }
 
-  return { ok: true, email: user.email };
+  return { ok: true, email };
 }

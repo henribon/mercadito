@@ -3,7 +3,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { IconBox, IconChart, IconHistory, IconList, IconScan } from "./Icons";
+import {
+  IconBox,
+  IconChart,
+  IconHistory,
+  IconList,
+  IconScan,
+  IconUser,
+} from "./Icons";
 
 const TABS = [
   { href: "/", label: "Lista", Icon: IconList },
@@ -11,6 +18,7 @@ const TABS = [
   { href: "/historico", label: "Histórico", Icon: IconHistory },
   { href: "/resumo", label: "Resumo", Icon: IconChart },
   { href: "/produtos", label: "Produtos", Icon: IconBox },
+  { href: "/conta", label: "Conta", Icon: IconUser },
 ] as const;
 
 /**

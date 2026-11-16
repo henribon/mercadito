@@ -1,5 +1,5 @@
 import { resolveBaseUrl } from "./base-url";
-import { query, queryOne } from "./db";
+import { isSchemaOutdated, query, queryOne, SCHEMA_OUTDATED_MESSAGE } from "./db";
 import { isEmailConfigured, sendReportEmail } from "./email";
 import {
   buildMonthlyReport,
@@ -125,7 +125,11 @@ export async function sendMonthlyReports(
     throw new Error("SMTP não configurado: o relatório mensal não tem como ser enviado.");
   }
 
-  const recipients = await query<RecipientRow>(REPORT_RECIPIENTS);
+  // A consulta le a coluna report_email: num banco que ainda nao recebeu o
+  // schema novo, o erro cru do Postgres nao diria o que fazer.
+  const recipients = await query<RecipientRow>(REPORT_RECIPIENTS).catch((cause: unknown) => {
+    throw isSchemaOutdated(cause) ? new Error(SCHEMA_OUTDATED_MESSAGE) : cause;
+  });
 
   // Um relatorio por casa, montado na primeira vez que ela aparece.
   const reports = new Map<string, MonthlyReport>();

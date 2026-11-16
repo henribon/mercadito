@@ -166,7 +166,7 @@ export const codigoDeAcesso = () =>
         },
       ),
 
-      /** GET /codigo/status — o que a aba Produtos precisa mostrar. */
+      /** GET /codigo/status — o que a aba Conta precisa mostrar. */
       statusCodigo: createAuthEndpoint(
         "/codigo/status",
         { method: "GET", use: [sessionMiddleware] },
