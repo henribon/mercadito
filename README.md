@@ -220,11 +220,14 @@ que estava na lista e apareceu na nota sai da lista automaticamente.
 
 **Quando a SEFAZ recusa a consulta.** Desde novembro/2026 o portal bloqueia boa
 parte das consultas automáticas (veja [Sobre a leitura da nota
-fiscal](#sobre-a-leitura-da-nota-fiscal)). Quando isso acontece o app mostra o
-motivo e um link para abrir a nota no navegador — lá ela carrega normalmente.
-Selecione tudo (`Ctrl+A` no desktop, toque longo → *Selecionar tudo* no
-celular), copie e cole em **Ou cole o conteúdo da nota**: o app extrai os itens
-do texto e segue para a mesma tela de conferência.
+fiscal](#sobre-a-leitura-da-nota-fiscal)). Quando isso acontece o app guarda o
+link do QR Code e mostra o botão **Abrir a nota na SEFAZ** — no navegador ela
+carrega normalmente. Selecione tudo (`Ctrl+A` no desktop, toque longo →
+*Selecionar tudo* no celular), copie e volte para o app: ele lê a página copiada
+sozinho e segue para a mesma tela de conferência. Na primeira vez o navegador
+pede permissão para ler a área de transferência; no iPhone a leitura só acontece
+com um toque, em **Ler a página copiada**. O campo **Ou cole o conteúdo da
+nota** continua lá para quem preferir colar na mão.
 
 **O app aprende.** Ao confirmar que `LEITE INTEG ITALAC 1L` é o produto
 "Leite integral", esse apelido fica salvo. Na próxima nota do mesmo mercado o
@@ -391,6 +394,17 @@ na mesma linha ou na seguinte (depende de como o navegador copia a tabela) e
 confere o dígito verificador da chave para não confundi-la com outro número
 longo da página.
 
+Depois de um QR Code recusado, a tela encurta esse caminho: guarda o link, abre
+a nota num toque e, quando a pessoa volta com a página copiada, lê a área de
+transferência sozinha (`visibilitychange` + `focus`). Só sai do aparelho o que
+tem cara de cupom (`looksLikeNfce`, em [`src/lib/nfce/copied.ts`](src/lib/nfce/copied.ts))
+— a área de transferência pode ter qualquer outra coisa. A página vai junto do
+QR lido (`{ paste, qr }`): a rota confere que a chave de acesso é a mesma, para
+ninguém lançar a nota de ontem que ficou aberta na outra aba, e registra a chave
+e o link de origem como numa consulta normal. O navegador não consegue buscar a
+página por conta própria — o portal não envia CORS —, então copiar continua
+sendo um gesto da pessoa.
+
 **Por que não um navegador headless:** o bloqueio é um desafio JavaScript — passar
 por ele é justamente o que o portal decidiu barrar, além de frágil e caro de
 hospedar. Se um dia a leitura de um toque for necessária de volta, o caminho
@@ -479,6 +493,7 @@ src/
     report-run.ts         Busca os dados, monta e envia (automático e manual)
     nfce/qr.ts            Interpreta o conteúdo do QR e valida a chave
     nfce/parse.ts         Extrai itens e totais do HTML ou do texto colado
+    nfce/copied.ts        Página copiada após o bloqueio: o que enviar e se é a mesma nota
     normalize.ts          Normalização e similaridade de nomes de produto
     qr-camera.ts          Constraints da câmera e leitura do QR (nativo/ZXing)
     data.ts               Regras puras: recorrência, sugestões e comparação de preços

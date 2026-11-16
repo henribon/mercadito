@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useApp } from "@/components/AppProvider";
 import { QrScanner } from "@/components/QrScanner";
@@ -15,6 +15,7 @@ import {
 import { getAliases, importPurchase } from "@/lib/actions";
 import type { ItemResolution } from "@/lib/data";
 import { money, quantity, dateTime } from "@/lib/format";
+import { looksLikeNfce } from "@/lib/nfce/copied";
 import { normalizeName, rankMatches, suggestProductName } from "@/lib/normalize";
 import type { NfceReceipt } from "@/lib/nfce/parse";
 import type { ProductWithStats } from "@/lib/types";
@@ -22,6 +23,15 @@ import type { ProductWithStats } from "@/lib/types";
 type Mode = "idle" | "camera" | "loading" | "review" | "saving" | "done";
 
 type Done = { itemsSaved: number; listItemsCleared: number; purchaseId: string };
+
+/**
+ * Um QR Code que a SEFAZ recusou consultar pelo servidor.
+ *
+ * `link` e a nota no portal — no navegador da pessoa ela abre normalmente — e
+ * `qr` e o que foi lido, reenviado junto da pagina copiada para conferir que e
+ * a mesma nota.
+ */
+type Blocked = { qr: string; link: string };
 
 /** Acima disso confiamos no palpite e ja deixamos o item ligado ao produto. */
 const AUTO_LINK_THRESHOLD = 0.72;
@@ -36,6 +46,13 @@ export default function EscanearPage() {
   const [manual, setManual] = useState("");
   /** Texto da pagina da nota, copiado do navegador. */
   const [paste, setPaste] = useState("");
+
+  const [blocked, setBlocked] = useState<Blocked | null>(null);
+  /** A pessoa ja foi abrir a nota: na volta, a pagina copiada e lida sozinha. */
+  const [awaitingCopy, setAwaitingCopy] = useState(false);
+  const [copyHint, setCopyHint] = useState<string | null>(null);
+  /** O ultimo texto que a leitura automatica ja tentou — para nao insistir nele. */
+  const lastCopied = useRef<string | null>(null);
 
   const [receipt, setReceipt] = useState<NfceReceipt | null>(null);
   const [sourceUrl, setSourceUrl] = useState<string | null>(null);
@@ -66,12 +83,29 @@ export default function EscanearPage() {
         const payload = await response.json();
 
         if (!response.ok) {
-          setError(payload.error ?? "Não consegui ler essa nota.");
-          setErrorLink(typeof payload.sourceUrl === "string" ? payload.sourceUrl : null);
+          const link = typeof payload.sourceUrl === "string" ? payload.sourceUrl : null;
+
+          if (input.qr && !input.paste && payload.reason === "blocked" && link) {
+            // O portal recusou o servidor, mas o link do QR continua valendo:
+            // a tela passa a conduzir a leitura pela pagina copiada.
+            setBlocked({ qr: input.qr, link });
+            setAwaitingCopy(false);
+            setCopyHint(null);
+            lastCopied.current = null;
+          } else {
+            // Uma pagina copiada que nao deu certo nao desfaz o bloqueio: a
+            // pessoa ainda pode copiar de novo.
+            if (!input.paste) setBlocked(null);
+            setError(payload.error ?? "Não consegui ler essa nota.");
+            setErrorLink(link);
+          }
+
           setMode("idle");
           return;
         }
 
+        setBlocked(null);
+        setAwaitingCopy(false);
         setReceipt(payload.receipt);
         setSourceUrl(payload.sourceUrl ?? null);
         setResolutions(defaultResolutions(payload.receipt, products, aliases));
@@ -85,6 +119,71 @@ export default function EscanearPage() {
   );
 
   const consult = useCallback((qr: string) => send({ qr }), [send]);
+
+  /**
+   * Le a pagina da nota direto da area de transferencia.
+   *
+   * `byTap` separa as duas situacoes: ao voltar para o app a tentativa e
+   * silenciosa (o navegador pode nao ter dado permissao, e no iPhone a leitura
+   * so funciona com um toque); no botao, a pessoa pediu e merece a explicacao.
+   */
+  const readCopied = useCallback(
+    async (byTap: boolean) => {
+      if (!blocked) return;
+
+      let text: string;
+      try {
+        text = await navigator.clipboard.readText();
+      } catch {
+        if (byTap) {
+          setCopyHint(
+            "O navegador não deixou ler o que está copiado. Cole a página no campo " +
+              "“Ou cole o conteúdo da nota”, logo abaixo.",
+          );
+        }
+        return;
+      }
+
+      // So o que tem cara de cupom sai do aparelho: a area de transferencia
+      // pode ter qualquer outra coisa.
+      if (!looksLikeNfce(text)) {
+        if (byTap) {
+          setCopyHint(
+            "O que está copiado não é a página da nota. Na página da SEFAZ, " +
+              "selecione tudo, copie e volte.",
+          );
+        }
+        return;
+      }
+
+      // Voltar ao app dispara mais de um evento, e um texto que ja falhou
+      // falharia de novo: sozinho, cada texto e tentado uma vez so.
+      if (!byTap && text === lastCopied.current) return;
+      lastCopied.current = text;
+
+      await send({ paste: text, qr: blocked.qr });
+    },
+    [blocked, send],
+  );
+
+  // Depois de "Abrir a nota", a volta para o app e o sinal de que a pagina ja
+  // foi copiada. `visibilitychange` chega antes do foco e o navegador so libera
+  // a leitura com a aba em foco — por isso os dois eventos.
+  useEffect(() => {
+    if (!blocked || !awaitingCopy || mode !== "idle") return;
+
+    const onReturn = () => {
+      if (document.visibilityState === "visible") void readCopied(false);
+    };
+
+    document.addEventListener("visibilitychange", onReturn);
+    window.addEventListener("focus", onReturn);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onReturn);
+      window.removeEventListener("focus", onReturn);
+    };
+  }, [blocked, awaitingCopy, mode, readCopied]);
 
   async function save() {
     if (!receipt) return;
@@ -112,6 +211,10 @@ export default function EscanearPage() {
     setErrorLink(null);
     setManual("");
     setPaste("");
+    setBlocked(null);
+    setAwaitingCopy(false);
+    setCopyHint(null);
+    lastCopied.current = null;
   }
 
   /* ---------------------------------------------------------------------- */
@@ -177,15 +280,71 @@ export default function EscanearPage() {
             onClick={() => {
               setError(null);
               setErrorLink(null);
+              setBlocked(null);
+              setAwaitingCopy(false);
               setMode("camera");
             }}
-            className="btn-primary w-full"
+            // Com uma nota esperando a pagina copiada, o passo seguinte e o do
+            // cartao abaixo — a camera vira a acao secundaria.
+            className={blocked ? "btn-ghost w-full" : "btn-primary w-full"}
           >
             <IconCamera size={18} />
-            Abrir câmera
+            {blocked ? "Escanear outra nota" : "Abrir câmera"}
           </button>
 
-          {error && (
+          {blocked && (
+            <div className="card mt-4 p-4">
+              <div className="flex gap-3">
+                <IconAlert size={18} className="mt-0.5 shrink-0 text-warn" />
+                <div className="min-w-0">
+                  <p className="text-sm">A SEFAZ recusou a consulta automática desta nota.</p>
+                  <p className="mt-1 text-xs text-muted">
+                    O link do QR Code ficou guardado. Abra a nota, selecione tudo, copie
+                    e volte para cá — o app lê a página copiada sozinho.
+                  </p>
+                </div>
+              </div>
+
+              <a
+                href={blocked.link}
+                target="_blank"
+                rel="noreferrer"
+                onClick={() => {
+                  setAwaitingCopy(true);
+                  setCopyHint(null);
+                  setError(null);
+                }}
+                className="btn-primary mt-4 w-full"
+              >
+                Abrir a nota na SEFAZ
+              </a>
+
+              {awaitingCopy && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void readCopied(true)}
+                    className="btn-ghost mt-2 w-full"
+                  >
+                    Ler a página copiada
+                  </button>
+
+                  <p role="status" className="mt-3 text-xs text-muted">
+                    {copyHint ??
+                      "Esperando você voltar com a página copiada. Se a leitura não começar sozinha, toque no botão acima."}
+                  </p>
+                </>
+              )}
+
+              {error && (
+                <p role="alert" className="mt-3 text-sm text-danger">
+                  {error}
+                </p>
+              )}
+            </div>
+          )}
+
+          {error && !blocked && (
             <div className="card mt-4 flex gap-3 p-4">
               <IconAlert size={18} className="mt-0.5 shrink-0 text-warn" />
               <div>
@@ -246,7 +405,7 @@ export default function EscanearPage() {
             <button
               type="button"
               disabled={!paste.trim()}
-              onClick={() => send({ paste })}
+              onClick={() => send({ paste, qr: blocked?.qr })}
               className="btn-ghost mt-2 w-full"
             >
               Ler o texto colado
@@ -254,7 +413,8 @@ export default function EscanearPage() {
             <p className="mt-2 text-xs text-muted">
               A SEFAZ bloqueia a consulta automática, mas a nota abre normalmente
               no seu navegador. Copiando a página inteira o app extrai os itens
-              do mesmo jeito.
+              do mesmo jeito — depois de um QR Code recusado, ele faz isso sozinho
+              quando você volta com a página copiada.
             </p>
           </div>
         </>
