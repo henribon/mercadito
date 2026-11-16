@@ -10,8 +10,13 @@ direto do QR Code do cupom fiscal (NFC-e de São Paulo).
   reaparece na lista quando passa do intervalo de costume.
 - **Resumo do mês** — quanto saiu, em quais mercados, onde cada produto sai mais
   barato e o que mais se repete na despesa.
-- **Entrar com 4 dígitos** — depois do primeiro acesso por e-mail, cada um cria
-  o próprio código e abre o app sem esperar link nenhum.
+- **Relatório mensal por e-mail** — no começo de cada mês chega o fechamento do
+  mês anterior: itens mais caros, no que mais se gastou, onde saiu mais barato e
+  a melhor época para comprar o que se repete.
+- **Entrar com senha** — depois do primeiro acesso por e-mail, cada um cria a
+  própria senha dentro do app e entra em qualquer aparelho com e-mail + senha.
+  Quem entrou uma vez fica conectado: a sessão vale um ano e se renova sozinha.
+- **Entrar com 4 dígitos** — atalho opcional por aparelho, no lugar da senha.
 
 Custo zero: o plano gratuito do Neon permite 100 projetos e a Vercel hospeda o
 app de graça.
@@ -25,7 +30,7 @@ app de graça.
 | App | Next.js 15 (App Router) + React 19 + TypeScript |
 | Estilo | Tailwind CSS v4, tema claro/escuro automático |
 | Banco | Neon (Postgres serverless) via `pg` |
-| Autenticação | Better Auth, magic link por e-mail |
+| Autenticação | Better Auth: magic link, senha e código de 4 dígitos |
 | Acesso a dados | Server Actions — o banco nunca é exposto ao navegador |
 | Leitura do QR | `@zxing/browser` (carregado sob demanda) |
 | Leitura da nota | Rota `/api/nfce` no servidor + `cheerio` (QR Code ou página colada) |
@@ -87,9 +92,14 @@ link aparece no terminal**, o que permite testar tudo antes de mexer com e-mail.
 Ao entrar, crie a casa. O código de convite aparece na aba **Produtos**, no fim
 da página — é ele que sua esposa usa para entrar na mesma lista.
 
-Ainda na aba **Produtos**, em *Entrar no app*, crie seu **código de 4 dígitos**.
-Da próxima vez a tela de login já vem com o teclado numérico, e o e-mail só volta
-a ser necessário em um aparelho novo.
+Ainda na aba **Produtos**, em *Entrar no app*, crie sua **senha**. A partir daí
+a tela de login aceita e-mail + senha em qualquer aparelho — inclusive no app
+instalado na tela inicial, onde o link do e-mail abriria no navegador. Depois de
+entrar, o aparelho fica conectado; a senha só volta a ser pedida se você tocar
+em *Sair*.
+
+No mesmo lugar dá para criar um **código de 4 dígitos**, que é um atalho só
+daquele aparelho: a tela de login passa a mostrar o teclado numérico.
 
 ## 5. Envio do link por e-mail
 
@@ -120,6 +130,12 @@ SMTP_FROM=voce@gmail.com
 
 Depois disso é só `git push`: a Vercel builda e publica sozinha.
 
+> **Ao atualizar um app que já está no ar**, rode `npm run db:setup` de novo
+> apontando para o banco de produção sempre que o [`neon/schema.sql`](neon/schema.sql)
+> mudar. A senha (`user_passwords`) e o relatório mensal (`report_deliveries` e a
+> coluna `monthly_report`) dependem disso; sem as tabelas, criar senha e enviar
+> relatório falham.
+
 > **Onde as variáveis vivem.** São três lugares com propósitos diferentes:
 > `.env.local` (sua máquina, nunca commitado), **Vercel → Environment Variables**
 > (produção) e **GitHub → Secrets** (apenas GitHub Actions). A Vercel puxa o
@@ -137,7 +153,40 @@ precisa de servidor por dois motivos independentes:
 - As credenciais do Postgres nunca podem ir para o navegador; por isso todo
   acesso a dados passa por Server Actions.
 
-## 7. Instalar no celular
+## 7. Relatório mensal por e-mail
+
+O relatório usa o mesmo SMTP do link de acesso (passo 5) e é disparado pelo
+agendador da Vercel, configurado em [`vercel.json`](vercel.json): nos dias 1, 2
+e 3 de cada mês, às 11h UTC (8h em São Paulo), ele chama
+`/api/cron/relatorio-mensal`.
+
+Falta só uma variável, na Vercel (**Settings → Environment Variables**):
+
+```env
+CRON_SECRET=<openssl rand -hex 32>
+```
+
+A Vercel manda esse valor sozinha no cabeçalho `Authorization` de cada chamada
+agendada. Sem ele a rota recusa tudo — uma URL pública que dispara e-mails não
+pode ficar aberta. O fuso que define onde o mês começa é `America/Sao_Paulo`;
+para mudar, defina `REPORT_TIMEZONE`.
+
+Três dias em vez de um porque o envio é idempotente: cada pessoa recebe um
+relatório por mês (tabela `report_deliveries`), então os dias 2 e 3 só completam
+o que tiver falhado no dia 1.
+
+Cada pessoa liga ou desliga o próprio recebimento na aba **Resumo**, em
+*Relatório por e-mail*. O botão **Enviar agora** manda na hora o relatório do
+mês que estiver na tela — é o jeito de ver como ele fica sem esperar a virada.
+
+Para reenviar um mês pela linha de comando (só chega para quem ainda não
+recebeu):
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" "https://SEU-APP.vercel.app/api/cron/relatorio-mensal?mes=2026-10"
+```
+
+## 8. Instalar no celular
 
 O app é uma PWA. Abra a URL no celular e:
 
@@ -180,7 +229,8 @@ desse prazo, o produto aparece em **Hora de repor** no topo da lista.
 
 **No fim do mês.** A aba *Resumo* mostra o total gasto e a variação em relação ao
 mês anterior, quanto foi para cada mercado, em quais produtos cada mercado sai
-mais barato e o que mais se repete na despesa.
+mais barato e o que mais se repete na despesa. No começo do mês seguinte, o
+relatório completo chega por e-mail.
 
 ---
 
@@ -218,6 +268,44 @@ A regra está em [`src/lib/pin.ts`](src/lib/pin.ts) e os endpoints em
 [`src/lib/pin-plugin.ts`](src/lib/pin-plugin.ts) — um plugin do Better Auth, e
 não uma Server Action, porque entrar pelo código cria uma sessão e isso exige o
 contexto de um endpoint do próprio Better Auth.
+
+**Senha, para qualquer aparelho.** O código de 4 dígitos só vale num aparelho
+que já entrou uma vez — e o app instalado na tela inicial é um "aparelho" que
+nunca entra, porque o link do e-mail abre no navegador, não nele. A senha cobre
+isso: é criada dentro do app, por quem já está logado, e vale com o e-mail em
+qualquer lugar.
+
+Aqui não há cookie de aparelho segurando a porta, então quem segura é o limite
+de tentativas **por conta**: cinco erros seguidos trancam a senha por 15
+minutos, de qualquer IP, e depois disso cada erro novo tranca de novo. O link
+por e-mail continua funcionando durante a tranca, então o dono nunca fica do
+lado de fora — e trocar a senha (logado) destranca. E-mail desconhecido, conta
+sem senha e senha errada devolvem a mesma resposta. A senha é guardada com
+`scrypt`, como o código.
+
+Não é o `emailAndPassword` do Better Auth de propósito: a conta continua
+nascendo só pelo link por e-mail, atrás do código de convite, e a senha é mais
+uma chave para a mesma porta. A regra está em
+[`src/lib/password.ts`](src/lib/password.ts) e os endpoints em
+[`src/lib/password-plugin.ts`](src/lib/password-plugin.ts).
+
+**Entrou, fica dentro.** A sessão vale um ano e se renova a cada dia de uso, em
+cookie httpOnly. Só volta à tela de login quem tocar em *Sair* ou passar um ano
+sem abrir o app.
+
+**O relatório é calculado fora do SQL.** Duas consultas trazem as compras e os
+itens crus de doze meses e a conta é feita em
+[`src/lib/report.ts`](src/lib/report.ts). Metade do relatório depende do dia
+*local* da compra (em que parte do mês, em que dia da semana), e o servidor
+roda em UTC — com o fuso como parâmetro de uma função pura, a virada do dia é
+testada sem banco.
+
+**"Melhor época" compara dentro do mesmo mercado.** Quem faz a compra grande do
+começo do mês no atacado e passa no mercado caro no fim concluiria, pelo preço
+cru, que "o começo do mês é mais barato" — quando a diferença é de loja. Por
+isso cada compra é comparada com a média do produto *naquele mercado*, um
+recorte só entra com compras repetidas, e diferença abaixo de 5% é tratada como
+acaso. O relatório mostra quantas compras sustentam cada conclusão.
 
 **Sem RLS, escopo no servidor.** O Postgres do Neon não é exposto ao navegador:
 todo acesso passa por Server Actions, e cada uma começa resolvendo a casa a
@@ -319,7 +407,7 @@ estrutura `NfceReceipt` já é agnóstica de estado.
 npm test
 ```
 
-São 111 testes em cinco frentes:
+São 197 testes em sete frentes:
 
 - **Parsing e casamento de nomes** — HTML da SEFAZ, números e datas em formato
   brasileiro, validação da chave de acesso, similaridade de nomes de produto.
@@ -328,6 +416,13 @@ São 111 testes em cinco frentes:
 - **Código de 4 dígitos** — o par aparelho + código: hash e conferência, cookie
   de outro aparelho, código de quem já removeu o dele, e as tentativas até o
   aparelho perder a confiança.
+- **Senha** — hash e conferência, a mesma resposta para e-mail desconhecido e
+  senha errada, as tentativas até a tranca e a tranca valendo até para a senha
+  certa.
+- **Relatório mensal** — o mês recortado no fuso de São Paulo (incluindo a
+  compra das 23h do dia 31 e o horário de verão de outros fusos), cada seção do
+  relatório, a "melhor época" sem confundir data com mercado, e o e-mail em si,
+  com nome de produto hostil escapado no HTML.
 - **Resumo de gastos** — o recorte do mês no fuso local (incluindo a virada do
   ano), a comparação de preço entre mercados e o placar de quem é mais barato.
   Junto vai a geometria do recorte da câmera.
@@ -335,7 +430,8 @@ São 111 testes em cinco frentes:
   Postgres real ([PGlite](https://pglite.dev), Postgres compilado para WASM),
   sem precisar de banco remoto. Cobre a matemática do `product_stats`, o índice
   que impede item duplicado na lista, os cascades, o isolamento entre casas e as
-  agregações do resumo.
+  agregações do resumo, a tranca da senha e a reserva que impede o relatório de
+  ser enviado duas vezes.
 
 ```bash
 npm run typecheck
@@ -351,9 +447,10 @@ src/
     page.tsx              Lista: pendentes, sugestões de reposição, adicionar
     escanear/             Câmera, consulta à SEFAZ e conferência da nota
     historico/            Compras e detalhe de cada nota
-    resumo/               Gasto do mês, mercados, preços e reincidência
-    produtos/             Catálogo, recorrência, código de convite, código de acesso
+    resumo/               Gasto do mês, mercados, preços, reincidência e relatório por e-mail
+    produtos/             Catálogo, recorrência, código de convite, senha e código de acesso
     api/auth/[...all]/    Rotas do Better Auth
+    api/cron/relatorio-mensal/  Gatilho do relatório (agendador da Vercel)
     api/nfce/             Proxy autenticado para o portal da SEFAZ
   components/             Provider com polling, tab bar, scanner, ícones, PinInput
   lib/
@@ -361,10 +458,15 @@ src/
     session.ts            Fronteira de segurança (sessão -> casa)
     sql.ts                Consultas SQL, compartilhadas com os testes
     db.ts                 Pool do Postgres e conversão de tipos
-    auth.ts               Better Auth (magic link + código de 4 dígitos)
+    auth.ts               Better Auth (magic link + senha + código de 4 dígitos)
+    password.ts           Regra da senha e da tranca por tentativas
+    password-plugin.ts    Endpoints /api/auth/senha/* (plugin do Better Auth)
     pin.ts                Regra e criptografia do código de 4 dígitos
     pin-plugin.ts         Endpoints /api/auth/codigo/* (plugin do Better Auth)
-    email.ts              Envio do link via SMTP
+    email.ts              Envio do link e do relatório via SMTP
+    report.ts             Relatório mensal: datas no fuso e toda a conta
+    report-email.ts       O relatório em HTML e texto
+    report-run.ts         Busca os dados, monta e envia (automático e manual)
     nfce/qr.ts            Interpreta o conteúdo do QR e valida a chave
     nfce/parse.ts         Extrai itens e totais do HTML ou do texto colado
     normalize.ts          Normalização e similaridade de nomes de produto
@@ -372,5 +474,6 @@ src/
     data.ts               Regras puras: recorrência, sugestões e comparação de preços
 neon/schema.sql           Tabelas, índices e a view de estatísticas
 scripts/db-setup.mjs      Aplica o schema no banco (npm run db:setup)
-tests/                    Parser, normalização, acesso, resumo e banco (PGlite)
+vercel.json               Agendamento do relatório mensal
+tests/                    Parser, normalização, acesso, senha, resumo, relatório e banco (PGlite)
 ```

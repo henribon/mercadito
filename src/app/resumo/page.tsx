@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useApp } from "@/components/AppProvider";
 import {
@@ -8,11 +8,19 @@ import {
   IconArrowUp,
   IconChevronLeft,
   IconChevronRight,
+  IconMail,
   IconRepeat,
   IconSpinner,
   IconStore,
 } from "@/components/Icons";
-import { getSpendInsights, type SpendInsights } from "@/lib/actions";
+import {
+  getReportSettings,
+  getSpendInsights,
+  sendReportNow,
+  setReportEnabled,
+  type ReportSettings,
+  type SpendInsights,
+} from "@/lib/actions";
 import { HABITS_MONTHS, monthWindow } from "@/lib/data";
 import { money, monthLabel, monthName, percent, quantity } from "@/lib/format";
 import type { RepeatProduct, StoreSpend } from "@/lib/types";
@@ -46,15 +54,24 @@ export default function ResumoPage() {
     [reference],
   );
 
+  // De qual mes sao os numeros que estao na tela.
+  const shownFor = useRef<Date | null>(null);
+
   useEffect(() => {
     if (!household) return;
 
     let cancelled = false;
-    setInsights(null);
+
+    // So o mes novo apaga a tela. O provider troca o objeto `household` a cada
+    // sincronizacao (15s), e nesse caso os numeros sao trocados em silencio —
+    // senao a tela piscaria e tudo abaixo (listas abertas, o aviso de
+    // "relatorio enviado") seria desmontado a cada volta.
+    if (shownFor.current !== reference) setInsights(null);
 
     getSpendInsights(monthWindow(reference))
       .then((result) => {
         if (cancelled) return;
+        shownFor.current = reference;
         setInsights(result);
         setError(null);
       })
@@ -114,9 +131,149 @@ export default function ResumoPage() {
           <StoresSection stores={insights.stores} />
           <PriceSection insights={insights} />
           <RepeatSection repeats={insights.repeats} />
+          <ReportSection reference={reference} />
         </div>
       )}
     </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+
+/**
+ * O relatorio completo, que vai por e-mail.
+ *
+ * Duas coisas separadas: o envio automatico de todo comeco de mes (que cada
+ * pessoa liga ou desliga para si) e o "manda agora", que serve para ver o
+ * relatorio de qualquer mes sem esperar a virada.
+ */
+function ReportSection({ reference }: { reference: Date }) {
+  const [settings, setSettings] = useState<ReportSettings | null>(null);
+  const [busy, setBusy] = useState<"toggle" | "send" | null>(null);
+  const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    getReportSettings()
+      .then((loaded) => {
+        if (!cancelled) setSettings(loaded);
+      })
+      // Sem as preferencias a secao simplesmente nao aparece.
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // O aviso de "enviado" e do mes que estava na tela, nao do proximo.
+  useEffect(() => setFeedback(null), [reference]);
+
+  if (!settings) return null;
+
+  async function toggle() {
+    if (!settings) return;
+    const enabled = !settings.enabled;
+
+    setBusy("toggle");
+    setFeedback(null);
+    try {
+      await setReportEnabled(enabled);
+      setSettings({ ...settings, enabled });
+    } catch {
+      setFeedback({ ok: false, text: "Não consegui salvar. Tente de novo." });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function send() {
+    setBusy("send");
+    setFeedback(null);
+    try {
+      const result = await sendReportNow({
+        year: reference.getFullYear(),
+        month: reference.getMonth(),
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      });
+      setFeedback(
+        result.ok
+          ? { ok: true, text: `Enviado para ${result.email}.` }
+          : { ok: false, text: result.message },
+      );
+    } catch {
+      setFeedback({ ok: false, text: "Não consegui enviar. Tente de novo." });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section>
+      <SectionTitle
+        icon={<IconMail size={15} />}
+        title="Relatório por e-mail"
+        note="o mês completo"
+      />
+
+      <div className="card p-4">
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm">Receber todo começo de mês</p>
+            <p className="mt-0.5 text-xs text-muted">
+              O fechamento do mês anterior chega em{" "}
+              <span className="break-all text-text">{settings.email}</span>: itens mais
+              caros, no que você mais gastou, onde saiu mais barato e a melhor época
+              para comprar o que se repete.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            role="switch"
+            aria-checked={settings.enabled}
+            aria-label="Receber o relatório todo começo de mês"
+            disabled={busy !== null}
+            onClick={() => void toggle()}
+            className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors
+                        disabled:opacity-40 ${
+                          settings.enabled ? "bg-accent" : "bg-border"
+                        }`}
+          >
+            <span
+              className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm
+                          transition-transform ${
+                            settings.enabled ? "translate-x-5" : "translate-x-0"
+                          }`}
+            />
+          </button>
+        </div>
+
+        <div className="mt-4 border-t border-border pt-4">
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={() => void send()}
+            className="btn-ghost w-full"
+          >
+            {busy === "send" && <IconSpinner size={16} />}
+            {busy === "send"
+              ? "Enviando"
+              : `Enviar agora o de ${monthName(reference)}`}
+          </button>
+
+          {feedback && (
+            <p
+              role={feedback.ok ? "status" : "alert"}
+              className={`mt-3 text-sm ${feedback.ok ? "text-accent" : "text-danger"}`}
+            >
+              {feedback.text}
+            </p>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 

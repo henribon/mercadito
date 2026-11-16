@@ -8,6 +8,27 @@ import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 
 import {
+  CLAIM_REPORT_DELIVERY,
+  DELETE_USER_PASSWORD,
+  PASSWORD_BY_EMAIL,
+  PASSWORD_FAILED,
+  PASSWORD_USED,
+  RELEASE_REPORT_DELIVERY,
+  REPORT_ITEMS,
+  REPORT_PREFERENCE,
+  REPORT_PURCHASES,
+  REPORT_RECIPIENTS,
+  SET_REPORT_PREFERENCE,
+  UPSERT_USER_PASSWORD,
+  USER_HAS_PASSWORD,
+} from "../src/lib/sql.ts";
+import {
+  buildMonthlyReport,
+  reportPeriod,
+  type ReportItem,
+  type ReportPurchase,
+} from "../src/lib/report.ts";
+import {
   ADD_PRODUCT_TO_LIST,
   CLEAR_BOUGHT_ITEMS,
   DELETE_DEVICES_FOR_USER,
@@ -128,6 +149,8 @@ describe("schema", () => {
       "list_items",
       "user_pins",
       "trusted_devices",
+      "user_passwords",
+      "report_deliveries",
     ]) {
       assert.ok(names.includes(expected), `faltou a tabela ${expected}`);
     }
@@ -768,5 +791,359 @@ describe("resumo de gastos", () => {
     assert.equal(ranking[0].storeName, "Mercado Barato");
     assert.equal(ranking[0].wins, 2);
     assert.equal(ranking[0].compared, 3);
+  });
+});
+
+describe("senha", () => {
+  test("UPSERT_USER_PASSWORD cria e depois troca a senha, sem duplicar", async () => {
+    await db.query(UPSERT_USER_PASSWORD, ["user-henri", "scrypt$aa$bb"]);
+    await db.query(UPSERT_USER_PASSWORD, ["user-henri", "scrypt$cc$dd"]);
+
+    const { rows } = await db.query<{ password_hash: string }>(PASSWORD_BY_EMAIL, [
+      "henri@example.com",
+    ]);
+    assert.equal(rows.length, 1, "cada pessoa tem uma senha só");
+    assert.equal(rows[0].password_hash, "scrypt$cc$dd");
+
+    assert.equal((await db.query(USER_HAS_PASSWORD, ["user-henri"])).rows.length, 1);
+  });
+
+  test("PASSWORD_BY_EMAIL acha o e-mail gravado com maiúsculas", async () => {
+    await db.query(
+      `insert into "user" (id, name, email) values ('user-caixa', 'Caixa', 'Caixa.Alta@Example.com')`,
+    );
+    await db.query(UPSERT_USER_PASSWORD, ["user-caixa", "scrypt$11$22"]);
+
+    // Quem chama ja manda em minusculas (normalizeEmail).
+    const { rows } = await db.query<{ user_id: string }>(PASSWORD_BY_EMAIL, [
+      "caixa.alta@example.com",
+    ]);
+    assert.equal(rows[0]?.user_id, "user-caixa");
+  });
+
+  test("quem nunca criou senha não aparece, mesmo tendo conta", async () => {
+    const { rows } = await db.query(PASSWORD_BY_EMAIL, ["esposa@example.com"]);
+    assert.equal(rows.length, 0);
+    assert.equal((await db.query(USER_HAS_PASSWORD, ["user-esposa"])).rows.length, 0);
+  });
+
+  test("PASSWORD_FAILED só tranca quando o limite é atingido", async () => {
+    type Falha = { failed_count: number; locked_until: Date | null };
+    const errar = async () =>
+      (await db.query<Falha>(PASSWORD_FAILED, ["user-henri", 3, 15])).rows[0];
+
+    const primeira = await errar();
+    const segunda = await errar();
+    assert.equal(primeira.failed_count, 1);
+    assert.equal(segunda.failed_count, 2);
+    assert.equal(segunda.locked_until, null, "ainda dentro do limite");
+
+    const terceira = await errar();
+    assert.equal(terceira.failed_count, 3);
+    assert.ok(terceira.locked_until, "o terceiro erro tranca");
+
+    const minutos =
+      (new Date(terceira.locked_until!).getTime() - Date.now()) / 60_000;
+    assert.ok(minutos > 14 && minutos <= 15.1, `tranca de ${minutos} minutos`);
+
+    const { rows } = await db.query<{ locked_until: Date | null }>(PASSWORD_BY_EMAIL, [
+      "henri@example.com",
+    ]);
+    assert.ok(rows[0].locked_until, "o login precisa enxergar a tranca");
+  });
+
+  test("os erros de uma conta não trancam a de outra pessoa", async () => {
+    const { rows } = await db.query<{ locked_until: Date | null }>(PASSWORD_BY_EMAIL, [
+      "caixa.alta@example.com",
+    ]);
+    assert.equal(rows[0].locked_until, null);
+  });
+
+  test("PASSWORD_USED zera os erros e destranca", async () => {
+    await db.query(PASSWORD_USED, ["user-henri"]);
+
+    const { rows } = await db.query<{ failed_count: number; locked_until: Date | null }>(
+      `select failed_count, locked_until from user_passwords where user_id = 'user-henri'`,
+    );
+    assert.equal(rows[0].failed_count, 0);
+    assert.equal(rows[0].locked_until, null);
+  });
+
+  test("trocar a senha também destranca: quem troca já provou quem é", async () => {
+    await db.query(PASSWORD_FAILED, ["user-henri", 1, 15]);
+    await db.query(UPSERT_USER_PASSWORD, ["user-henri", "scrypt$ee$ff"]);
+
+    const { rows } = await db.query<{ failed_count: number; locked_until: Date | null }>(
+      `select failed_count, locked_until from user_passwords where user_id = 'user-henri'`,
+    );
+    assert.equal(rows[0].failed_count, 0);
+    assert.equal(rows[0].locked_until, null);
+  });
+
+  test("DELETE_USER_PASSWORD apaga só a senha de quem pediu", async () => {
+    await db.query(DELETE_USER_PASSWORD, ["user-henri"]);
+
+    assert.equal((await db.query(USER_HAS_PASSWORD, ["user-henri"])).rows.length, 0);
+    assert.equal((await db.query(USER_HAS_PASSWORD, ["user-caixa"])).rows.length, 1);
+  });
+
+  test("apagar a conta leva a senha junto", async () => {
+    await db.query(`delete from "user" where id = 'user-caixa'`);
+    assert.equal((await db.query(USER_HAS_PASSWORD, ["user-caixa"])).rows.length, 0);
+  });
+});
+
+describe("relatorio mensal", () => {
+  // Casa propria e datas fixas, como no resumo.
+  const CASA = "ffffffff-0000-0000-0000-000000000001";
+  const VIZINHA = "ffffffff-0000-0000-0000-000000000002";
+  const LEITE_M = "ffffffff-1111-0000-0000-000000000001";
+  const PICANHA_M = "ffffffff-1111-0000-0000-000000000002";
+
+  const SP = "America/Sao_Paulo";
+  const OUTUBRO = reportPeriod(2026, 9, SP);
+  const JANELA = [OUTUBRO.historyFrom, OUTUBRO.to];
+
+  // O driver de producao ja converte numeric e timestamptz (lib/db.ts); no
+  // PGlite a conversao e feita aqui.
+  const toPurchase = (row: Record<string, unknown>): ReportPurchase => ({
+    id: String(row.id),
+    store_key: String(row.store_key),
+    store_name: String(row.store_name),
+    purchased_at: new Date(row.purchased_at as string).toISOString(),
+    total: Number(row.total),
+    discount: Number(row.discount),
+  });
+
+  const toItem = (row: Record<string, unknown>): ReportItem => ({
+    purchase_id: String(row.purchase_id),
+    product_id: row.product_id === null ? null : String(row.product_id),
+    name: String(row.name),
+    unit: String(row.unit),
+    quantity: Number(row.quantity),
+    unit_price: row.unit_price === null ? null : Number(row.unit_price),
+    total_price: row.total_price === null ? null : Number(row.total_price),
+    purchased_at: new Date(row.purchased_at as string).toISOString(),
+    store_key: String(row.store_key),
+    store_name: String(row.store_name),
+  });
+
+  before(async () => {
+    await db.exec(`
+      insert into "user" (id, name, email) values
+        ('user-rel-1', 'Henri Relatorio', 'rel1@example.com'),
+        ('user-rel-2', 'Ana', 'rel2@example.com'),
+        ('user-rel-3', 'Vizinho', 'rel3@example.com');
+
+      insert into households (id, name, invite_code) values
+        ('${CASA}', 'Casa do relatorio', 'REL001'),
+        ('${VIZINHA}', 'Casa vizinha', 'REL002');
+
+      insert into household_members (household_id, user_id, display_name, joined_at) values
+        ('${CASA}', 'user-rel-1', null, '2026-01-01T00:00:00Z'),
+        ('${CASA}', 'user-rel-2', 'Aninha', '2026-01-02T00:00:00Z'),
+        ('${VIZINHA}', 'user-rel-3', 'Vizinho', '2026-01-03T00:00:00Z');
+
+      insert into products (id, household_id, name, norm_name, unit) values
+        ('${LEITE_M}',   '${CASA}', 'Leite',   'LEITE',   'UN'),
+        ('${PICANHA_M}', '${CASA}', 'Picanha', 'PICANHA', 'KG');
+
+      insert into purchases
+        (id, household_id, store_name, store_cnpj, access_key,
+         total_amount, discount, paid_amount, purchased_at)
+      values
+        ('ffffffff-2222-0000-0000-000000000001', '${CASA}', 'Mercado Barato', '111', 'M1', 105, 5, 100, '2026-10-03T15:00:00Z'),
+        ('ffffffff-2222-0000-0000-000000000002', '${CASA}', 'Mercado Caro',   '222', 'M2', 200, null, 200, '2026-10-15T15:00:00Z'),
+        -- 23h do dia 31 em Sao Paulo: UTC ja virou novembro
+        ('ffffffff-2222-0000-0000-000000000003', '${CASA}', '  ', null, 'M3', 10, null, null, '2026-11-01T02:00:00Z'),
+        -- 00h30 do dia 1 de novembro em Sao Paulo: fora do relatorio de outubro
+        ('ffffffff-2222-0000-0000-000000000004', '${CASA}', 'Mercado Caro', '222', 'M4', 40, null, 40, '2026-11-01T03:30:00Z'),
+        ('ffffffff-2222-0000-0000-000000000005', '${CASA}', 'Mercado Barato', '111', 'M5', 150, null, 150, '2026-09-09T15:00:00Z'),
+        ('ffffffff-2222-0000-0000-000000000006', '${VIZINHA}', 'Mercado Barato', '111', 'V1', 77, null, 77, '2026-10-10T15:00:00Z');
+
+      insert into purchase_items
+        (purchase_id, household_id, product_id, raw_description,
+         quantity, unit, unit_price, total_price, position)
+      values
+        ('ffffffff-2222-0000-0000-000000000001', '${CASA}', '${LEITE_M}',   'LEITE 1L',     6,   'UN', 4.00, 24.00, 0),
+        -- sem produto ligado e sem total: exercita o left join e o coalesce
+        ('ffffffff-2222-0000-0000-000000000001', '${CASA}', null,           'SACOLA PLAST', 2,   '',   0.10, null,  1),
+        ('ffffffff-2222-0000-0000-000000000002', '${CASA}', '${PICANHA_M}', 'PICANHA KG',   1.2, 'KG', 80.00, 96.00, 0),
+        ('ffffffff-2222-0000-0000-000000000002', '${CASA}', '${LEITE_M}',   'LEITE 1L',     2,   'UN', 5.00, 10.00, 1),
+        ('ffffffff-2222-0000-0000-000000000004', '${CASA}', '${LEITE_M}',   'LEITE 1L',     1,   'UN', 9.00, 9.00, 0),
+        ('ffffffff-2222-0000-0000-000000000005', '${CASA}', '${PICANHA_M}', 'PICANHA KG',   1,   'KG', 60.00, 60.00, 0),
+        ('ffffffff-2222-0000-0000-000000000006', '${VIZINHA}', null,        'CAFE VIZINHO', 1,   'UN', 77.00, 77.00, 0);
+    `);
+  });
+
+  test("a preferencia de receber o relatorio ja vem ligada", async () => {
+    const { rows } = await db.query<{ monthly_report: boolean }>(REPORT_PREFERENCE, [
+      CASA,
+      "user-rel-1",
+    ]);
+    assert.equal(rows[0].monthly_report, true, "quem já era membro passa a receber");
+  });
+
+  test("REPORT_PURCHASES recorta pelo instante e cai para o total sem valor pago", async () => {
+    const { rows } = await db.query<Record<string, unknown>>(REPORT_PURCHASES, [
+      CASA,
+      ...JANELA,
+    ]);
+    const purchases = rows.map(toPurchase);
+
+    assert.deepEqual(
+      purchases.map((row) => [row.store_name, row.total, row.discount]),
+      [
+        ["Mercado Barato", 150, 0],
+        ["Mercado Barato", 100, 5],
+        ["Mercado Caro", 200, 0],
+        // nome em branco e sem CNPJ; sem valor pago, vale o total da nota
+        ["Sem identificação", 10, 0],
+      ],
+    );
+    assert.equal(purchases[1].store_key, "111", "o CNPJ é a chave do mercado");
+    assert.equal(purchases[3].store_key, "");
+  });
+
+  test("REPORT_ITEMS traz linha sem produto com a descrição da nota", async () => {
+    const { rows } = await db.query<Record<string, unknown>>(REPORT_ITEMS, [
+      CASA,
+      ...JANELA,
+    ]);
+    const items = rows.map(toItem);
+
+    assert.equal(items.length, 5, "a compra de 1º de novembro fica de fora");
+
+    const sacola = items.find((row) => row.name === "SACOLA PLAST")!;
+    assert.equal(sacola.product_id, null);
+    assert.equal(sacola.unit, "UN", "unidade em branco cai para UN");
+    assert.equal(sacola.total_price, 0.2, "sem total, vale quantidade x preço");
+
+    const picanha = items.find((row) => row.name === "Picanha")!;
+    assert.equal(picanha.unit, "KG");
+    assert.equal(picanha.store_name, "Mercado Barato", "a de setembro vem primeiro");
+  });
+
+  test("as consultas do relatorio nao enxergam a casa vizinha", async () => {
+    const purchases = await db.query<{ id: string }>(REPORT_PURCHASES, [CASA, ...JANELA]);
+    const items = await db.query<{ name: string }>(REPORT_ITEMS, [CASA, ...JANELA]);
+
+    assert.ok(!purchases.rows.some((row) => row.id.endsWith("000000000006")));
+    assert.ok(!items.rows.some((row) => row.name === "CAFE VIZINHO"));
+  });
+
+  test("o resultado das consultas alimenta o relatorio de report.ts", async () => {
+    const purchases = await db.query<Record<string, unknown>>(REPORT_PURCHASES, [
+      CASA,
+      ...JANELA,
+    ]);
+    const items = await db.query<Record<string, unknown>>(REPORT_ITEMS, [CASA, ...JANELA]);
+
+    const report = buildMonthlyReport(
+      OUTUBRO,
+      purchases.rows.map(toPurchase),
+      items.rows.map(toItem),
+    );
+
+    assert.equal(report.total, 310, "100 + 200 + 10 da compra das 23h do dia 31");
+    assert.equal(report.purchaseCount, 3);
+    assert.equal(report.discount, 5);
+    assert.equal(report.previousTotal, 150);
+    assert.deepEqual(
+      report.topSpend.map((row) => [row.name, row.total]),
+      [
+        ["Picanha", 96],
+        ["Leite", 34],
+        ["SACOLA PLAST", 0.2],
+      ],
+    );
+    assert.equal(report.priciest[0].name, "Picanha");
+    assert.deepEqual(
+      report.increases.map((row) => row.name),
+      ["Picanha"],
+    );
+    assert.equal(report.cheaper[0].cheapestStore, "Mercado Barato");
+  });
+
+  test("REPORT_RECIPIENTS lista quem recebe, com a casa e o nome de exibição", async () => {
+    const { rows } = await db.query<{
+      household_id: string;
+      household_name: string;
+      email: string;
+      name: string;
+    }>(REPORT_RECIPIENTS);
+
+    const daCasa = rows.filter((row) => row.household_id === CASA);
+    assert.deepEqual(
+      daCasa.map((row) => [row.email, row.name, row.household_name]),
+      [
+        ["rel1@example.com", "Henri Relatorio", "Casa do relatorio"],
+        ["rel2@example.com", "Aninha", "Casa do relatorio"],
+      ],
+    );
+  });
+
+  test("SET_REPORT_PREFERENCE desliga só para quem pediu", async () => {
+    await db.query(SET_REPORT_PREFERENCE, [CASA, "user-rel-2", false]);
+
+    const { rows } = await db.query<{ email: string }>(REPORT_RECIPIENTS);
+    const emails = rows.map((row) => row.email);
+
+    assert.ok(!emails.includes("rel2@example.com"));
+    assert.ok(emails.includes("rel1@example.com"), "o outro morador continua recebendo");
+
+    const pref = await db.query<{ monthly_report: boolean }>(REPORT_PREFERENCE, [
+      CASA,
+      "user-rel-2",
+    ]);
+    assert.equal(pref.rows[0].monthly_report, false);
+  });
+
+  test("SET_REPORT_PREFERENCE não alcança membro de outra casa", async () => {
+    await db.query(SET_REPORT_PREFERENCE, [CASA, "user-rel-3", false]);
+
+    const pref = await db.query<{ monthly_report: boolean }>(REPORT_PREFERENCE, [
+      VIZINHA,
+      "user-rel-3",
+    ]);
+    assert.equal(pref.rows[0].monthly_report, true);
+  });
+
+  test("CLAIM_REPORT_DELIVERY reserva o envio uma vez só por pessoa e mês", async () => {
+    const claim = [CASA, "user-rel-1", "2026-10-01"];
+
+    assert.equal((await db.query(CLAIM_REPORT_DELIVERY, claim)).rows.length, 1);
+    assert.equal(
+      (await db.query(CLAIM_REPORT_DELIVERY, claim)).rows.length,
+      0,
+      "a segunda rodada do agendador não pode mandar de novo",
+    );
+
+    // Outro mes e outra pessoa sao envios diferentes.
+    assert.equal(
+      (await db.query(CLAIM_REPORT_DELIVERY, [CASA, "user-rel-1", "2026-11-01"])).rows.length,
+      1,
+    );
+    assert.equal(
+      (await db.query(CLAIM_REPORT_DELIVERY, [CASA, "user-rel-2", "2026-10-01"])).rows.length,
+      1,
+    );
+  });
+
+  test("RELEASE_REPORT_DELIVERY devolve a reserva quando o envio falha", async () => {
+    const claim = [CASA, "user-rel-1", "2026-10-01"];
+
+    await db.query(RELEASE_REPORT_DELIVERY, claim);
+
+    assert.equal(
+      (await db.query(CLAIM_REPORT_DELIVERY, claim)).rows.length,
+      1,
+      "a próxima rodada tenta de novo",
+    );
+    assert.equal(
+      (await db.query(CLAIM_REPORT_DELIVERY, [CASA, "user-rel-1", "2026-11-01"])).rows.length,
+      0,
+      "liberar outubro não mexe em novembro",
+    );
   });
 });

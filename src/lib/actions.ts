@@ -20,6 +20,8 @@ import {
   PURCHASE_BY_ID,
   PURCHASE_ITEMS,
   PURCHASE_SUMMARIES,
+  REPORT_PREFERENCE,
+  SET_REPORT_PREFERENCE,
   SPEND_BY_STORE,
   SPEND_TOTAL,
   TOP_REPEAT_PRODUCTS,
@@ -27,6 +29,9 @@ import {
 } from "./sql";
 import { getMembership, requireMembership, requireUser } from "./session";
 import { comparePrices, rankStoresByPrice } from "./data";
+import { isEmailConfigured } from "./email";
+import { isValidTimeZone, reportPeriod } from "./report";
+import { deliverReport, loadMonthlyReport, reportTimeZone } from "./report-run";
 import type {
   ItemResolution,
   PriceComparison,
@@ -555,4 +560,93 @@ export async function getSpendInsights(window: SpendWindow): Promise<SpendInsigh
     cheaper: comparePrices(prices),
     storeRanking: rankStoresByPrice(prices),
   };
+}
+
+/* ---------------------------------------------------------------------------
+ * Relatorio mensal por e-mail
+ * ------------------------------------------------------------------------- */
+
+export type ReportSettings = {
+  /** Esta pessoa recebe o relatorio automatico? */
+  enabled: boolean;
+  /** Para onde ele vai — mostrado na tela para nao haver surpresa. */
+  email: string;
+};
+
+export async function getReportSettings(): Promise<ReportSettings> {
+  const { user, household } = await requireMembership();
+
+  const row = await queryOne<{ monthly_report: boolean }>(REPORT_PREFERENCE, [
+    household.id,
+    user.id,
+  ]);
+
+  return { enabled: row?.monthly_report ?? true, email: user.email };
+}
+
+/** Liga ou desliga o relatorio automatico — so para quem esta pedindo. */
+export async function setReportEnabled(enabled: boolean): Promise<void> {
+  const { user, household } = await requireMembership();
+  await query(SET_REPORT_PREFERENCE, [household.id, user.id, enabled === true]);
+}
+
+export type SendReportResult =
+  | { ok: true; email: string }
+  | { ok: false; message: string };
+
+/**
+ * Envia agora o relatorio de um mes, so para quem pediu.
+ *
+ * O mes e o fuso vem do aparelho, como no resumo: e ele que sabe onde o mes
+ * comeca. Nao mexe em report_deliveries — pedir na mao nao deve impedir (nem
+ * ser impedido por) o envio automatico.
+ */
+export async function sendReportNow(request: {
+  year: number;
+  /** 0 = janeiro. */
+  month: number;
+  timeZone: string;
+}): Promise<SendReportResult> {
+  const { user, household } = await requireMembership();
+
+  const { year, month, timeZone } = request;
+
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    year < 2000 ||
+    year > 2100 ||
+    month < 0 ||
+    month > 11
+  ) {
+    return { ok: false, message: "Mês inválido." };
+  }
+
+  const period = reportPeriod(year, month, isValidTimeZone(timeZone) ? timeZone : reportTimeZone());
+
+  if (!isEmailConfigured()) {
+    return {
+      ok: false,
+      message:
+        "O envio de e-mail (SMTP) não está configurado no servidor, então não há como mandar o relatório.",
+    };
+  }
+
+  const report = await loadMonthlyReport(household.id, period);
+
+  if (report.purchaseCount === 0) {
+    return { ok: false, message: "Nenhuma compra registrada neste mês — não há o que relatar." };
+  }
+
+  try {
+    await deliverReport(report, {
+      householdName: household.name,
+      email: user.email,
+      name: user.name,
+    });
+  } catch {
+    return { ok: false, message: "Não consegui enviar o e-mail. Tente de novo em instantes." };
+  }
+
+  return { ok: true, email: user.email };
 }

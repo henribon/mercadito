@@ -81,3 +81,35 @@ export async function sendMagicLinkEmail(email: string, url: string): Promise<vo
     `,
   });
 }
+
+/** Ha um SMTP configurado? Sem ele o relatorio mensal nao tem como sair. */
+export function isEmailConfigured(): boolean {
+  return getTransport() !== null;
+}
+
+/**
+ * Envio do relatorio mensal (src/lib/report-email.ts monta o conteudo).
+ *
+ * Devolve `false` sem SMTP em vez de despejar o HTML no console, como o link
+ * de acesso faz: um relatorio inteiro no terminal nao ajuda ninguem, e quem
+ * chamou precisa saber que nada foi enviado.
+ */
+export async function sendReportEmail(
+  to: string,
+  message: { subject: string; text: string; html: string },
+): Promise<boolean> {
+  const transport = getTransport();
+  if (!transport) return false;
+
+  const from = process.env.SMTP_FROM ?? process.env.SMTP_USER!;
+
+  await transport.sendMail({
+    from: `Mercadito <${from}>`,
+    to,
+    subject: message.subject,
+    text: message.text,
+    html: message.html,
+  });
+
+  return true;
+}

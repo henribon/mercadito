@@ -6,9 +6,11 @@ import { authClient } from "@/lib/auth-client";
 import {
   ACCESS_CODE_HEADER,
   DEVICE_REJECTED,
+  PASSWORD_MAX_LENGTH,
   PENDING_CODE_KEY,
   PIN_LENGTH,
 } from "@/lib/auth-shared";
+import { entrarComSenha } from "@/lib/password-client";
 import { aparelhoDoCodigo, entrarComCodigo, PinError } from "@/lib/pin-client";
 import { IconSpinner } from "@/components/Icons";
 import { PinInput } from "@/components/PinInput";
@@ -27,12 +29,13 @@ function safeNext(): string {
 }
 
 /**
- * Duas portas para o mesmo app.
+ * Tres portas para o mesmo app.
  *
  * Se este navegador ja tem um codigo de 4 digitos cadastrado, e ele que
- * aparece — entrar deixa de passar pelo e-mail. O formulario de e-mail fica
- * como o caminho da primeira vez e a saida de emergencia de quem esqueceu o
- * codigo.
+ * aparece. Senao, e-mail + senha — que funciona em qualquer aparelho, inclusive
+ * no app instalado, onde o link do e-mail abriria no navegador. O link por
+ * e-mail fica como o caminho da primeira vez e a saida de emergencia de quem
+ * esqueceu a senha.
  */
 export default function LoginPage() {
   /** null enquanto o servidor nao respondeu se conhece este aparelho. */
@@ -84,7 +87,7 @@ export default function LoginPage() {
           }}
         />
       ) : (
-        <FormularioEmail aviso={aviso} />
+        <FormularioEntrada aviso={aviso} />
       )}
     </div>
   );
@@ -165,9 +168,15 @@ function FormularioCodigo({
 
 /* -------------------------------------------------------------------------- */
 
-/** Primeiro acesso, aparelho novo, ou codigo esquecido. */
-function FormularioEmail({ aviso }: { aviso: string | null }) {
+/** Aparelho novo, app instalado, primeiro acesso ou codigo esquecido. */
+function FormularioEntrada({ aviso }: { aviso: string | null }) {
+  /** "senha" = e-mail + senha; "link" = receber o link por e-mail. */
+  const [modo, setModo] = useState<"senha" | "link">("senha");
+
+  // O e-mail mora aqui para sobreviver a troca de modo: quem digitou e so
+  // depois lembrou que nao tem senha nao precisa digitar de novo.
   const [email, setEmail] = useState("");
+  const [senha, setSenha] = useState("");
   const [code, setCode] = useState("");
   const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">(
     aviso ? "error" : "idle",
@@ -180,6 +189,7 @@ function FormularioEmail({ aviso }: { aviso: string | null }) {
     const params = new URLSearchParams(window.location.search);
     const failure = params.get("error") ?? params.get("erro");
     if (failure) {
+      setModo("link");
       setStatus("error");
       setMessage(
         /INVALID_TOKEN/i.test(failure)
@@ -189,7 +199,31 @@ function FormularioEmail({ aviso }: { aviso: string | null }) {
     }
   }, []);
 
-  async function handleSubmit(event: React.FormEvent) {
+  function trocarModo(novo: "senha" | "link") {
+    setModo(novo);
+    setStatus("idle");
+    setMessage("");
+  }
+
+  async function entrar(event: React.FormEvent) {
+    event.preventDefault();
+    if (!email.trim() || !senha) return;
+
+    setStatus("sending");
+
+    try {
+      await entrarComSenha(email.trim(), senha);
+
+      // Recarga inteira, como no codigo: a sessao acabou de nascer.
+      window.location.href = safeNext();
+    } catch (cause) {
+      setSenha("");
+      setStatus("error");
+      setMessage(cause instanceof Error ? cause.message : "Não consegui entrar.");
+    }
+  }
+
+  async function pedirLink(event: React.FormEvent) {
     event.preventDefault();
     if (!email.trim()) return;
 
@@ -244,22 +278,86 @@ function FormularioEmail({ aviso }: { aviso: string | null }) {
     );
   }
 
-  return (
-    <form onSubmit={handleSubmit} className="card p-5">
+  const campoEmail = (
+    <>
       <label htmlFor="email" className="label">
         Seu e-mail
       </label>
       <input
         id="email"
+        name="email"
         type="email"
         inputMode="email"
-        autoComplete="email"
+        // "username" e o que faz o gerenciador de senhas ligar o e-mail a senha.
+        autoComplete={modo === "senha" ? "username" : "email"}
         required
         value={email}
         onChange={(event) => setEmail(event.target.value)}
         placeholder="voce@exemplo.com"
         className="field"
       />
+    </>
+  );
+
+  const erro = status === "error" && (
+    <p role="alert" className="mt-3 text-sm text-danger">
+      {message}
+    </p>
+  );
+
+  if (modo === "senha") {
+    return (
+      <form onSubmit={entrar} className="card p-5">
+        {campoEmail}
+
+        <label htmlFor="senha" className="label mt-4">
+          Senha
+        </label>
+        <input
+          id="senha"
+          name="senha"
+          type="password"
+          autoComplete="current-password"
+          required
+          maxLength={PASSWORD_MAX_LENGTH}
+          value={senha}
+          onChange={(event) => setSenha(event.target.value)}
+          className="field"
+        />
+
+        <button
+          type="submit"
+          disabled={status === "sending"}
+          className="btn-primary mt-4 w-full"
+        >
+          {status === "sending" && <IconSpinner size={16} />}
+          {status === "sending" ? "Entrando" : "Entrar"}
+        </button>
+
+        {erro}
+
+        <p className="mt-3 text-xs text-muted">
+          Depois de entrar, este aparelho fica conectado — a senha só volta a ser pedida
+          se você sair.
+        </p>
+
+        <div className="mt-4 border-t border-border pt-3">
+          <p className="text-xs text-muted">Primeira vez aqui ou esqueceu a senha?</p>
+          <button
+            type="button"
+            onClick={() => trocarModo("link")}
+            className="btn-ghost mt-2 w-full"
+          >
+            Receber link por e-mail
+          </button>
+        </div>
+      </form>
+    );
+  }
+
+  return (
+    <form onSubmit={pedirLink} className="card p-5">
+      {campoEmail}
 
       <label htmlFor="code" className="label mt-4">
         Código de convite
@@ -286,12 +384,23 @@ function FormularioEmail({ aviso }: { aviso: string | null }) {
         {status === "sending" ? "Enviando" : "Receber link de acesso"}
       </button>
 
+      {erro}
+
       <p className="mt-3 text-xs text-muted">
-        Sem senha. Você recebe um link por e-mail e entra com um toque. Depois dá para
-        criar um código de {PIN_LENGTH} dígitos e não precisar mais do e-mail.
+        Você recebe um link e entra com um toque. Lá dentro, na aba Produtos, dá para
+        criar uma senha ou um código de {PIN_LENGTH} dígitos e não precisar mais do
+        e-mail.
       </p>
 
-      {status === "error" && <p className="mt-3 text-sm text-danger">{message}</p>}
+      <div className="mt-4 border-t border-border pt-3">
+        <button
+          type="button"
+          onClick={() => trocarModo("senha")}
+          className="btn-ghost w-full"
+        >
+          Já tenho senha
+        </button>
+      </div>
     </form>
   );
 }

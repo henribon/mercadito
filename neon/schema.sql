@@ -185,3 +185,39 @@ create table if not exists trusted_devices (
 );
 
 create index if not exists trusted_devices_user_idx on trusted_devices (user_id);
+
+-- ---------------------------------------------------------------------------
+-- Senha: entrar com e-mail + senha em qualquer aparelho.
+--
+-- Diferente do codigo de 4 digitos, aqui nao ha cookie de aparelho segurando a
+-- porta — quem segura e o limite de tentativas por conta. Passou do limite, a
+-- senha fica trancada ate locked_until; o link por e-mail continua valendo.
+-- ---------------------------------------------------------------------------
+create table if not exists user_passwords (
+  user_id       text primary key references "user"(id) on delete cascade,
+  -- scrypt$<salt hex>$<hash hex>; a senha em si nunca e gravada.
+  password_hash text not null,
+  failed_count  integer not null default 0,
+  locked_until  timestamptz,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+
+-- ---------------------------------------------------------------------------
+-- Relatorio mensal por e-mail.
+--
+-- Cada pessoa da casa decide se recebe (monthly_report). report_deliveries
+-- registra o que ja foi enviado: o agendador pode disparar mais de uma vez no
+-- mesmo mes, e ninguem quer o mesmo relatorio duas vezes na caixa de entrada.
+-- ---------------------------------------------------------------------------
+alter table household_members
+  add column if not exists monthly_report boolean not null default true;
+
+create table if not exists report_deliveries (
+  household_id uuid not null references households(id) on delete cascade,
+  user_id      text not null references "user"(id) on delete cascade,
+  -- Primeiro dia do mes a que o relatorio se refere.
+  month        date not null,
+  sent_at      timestamptz not null default now(),
+  primary key (household_id, user_id, month)
+);

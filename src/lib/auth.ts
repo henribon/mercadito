@@ -8,11 +8,16 @@ import { ACCESS_CODE_HEADER } from "./auth-shared";
 import { resolveBaseUrl, trustedOrigins } from "./base-url";
 import { pool, queryOne } from "./db";
 import { sendMagicLinkEmail } from "./email";
+import { senhaDeAcesso } from "./password-plugin";
 import { codigoDeAcesso } from "./pin-plugin";
 import { HOUSEHOLD_BY_INVITE_CODE, HOUSEHOLD_COUNT, USER_BY_EMAIL } from "./sql";
 
 /**
- * Autenticacao sem senha, com as tabelas no mesmo Postgres do app.
+ * Autenticacao com as tabelas no mesmo Postgres do app.
+ *
+ * Tres chaves para a mesma porta: o link por e-mail (primeiro acesso e saida
+ * de emergencia), a senha (qualquer aparelho — src/lib/password.ts) e o codigo
+ * de 4 digitos (aparelho que ja entrou uma vez — src/lib/pin.ts).
  *
  * As tabelas de auth ("user", session, account, verification) sao criadas pelo
  * `npx auth@latest migrate` — veja o README. O schema da aplicacao em
@@ -41,7 +46,9 @@ export const auth = betterAuth({
   baseURL: base.url,
   trustedOrigins: trustedOrigins(process.env),
 
-  // Uso pessoal: so magic link, nada de senha para lembrar.
+  // A senha do app e um plugin nosso (senhaDeAcesso), nao o emailAndPassword do
+  // Better Auth: a conta continua nascendo so pelo link por e-mail, atras do
+  // codigo de convite.
   emailAndPassword: { enabled: false },
 
   hooks: {
@@ -67,7 +74,10 @@ export const auth = betterAuth({
   },
 
   session: {
-    expiresIn: 60 * 60 * 24 * 60, // 60 dias — nao queremos relogar toda semana
+    // Entrou uma vez num aparelho, fica dentro: a sessao vale um ano e se
+    // renova sozinha a cada dia de uso, entao so quem passa um ano inteiro sem
+    // abrir o app (ou toca em "Sair") volta a ver a tela de login.
+    expiresIn: 60 * 60 * 24 * 365,
     updateAge: 60 * 60 * 24,
   },
 
@@ -81,6 +91,8 @@ export const auth = betterAuth({
     // Depois do primeiro login por e-mail, o codigo de 4 digitos passa a ser o
     // caminho normal de entrada. Veja src/lib/pin.ts.
     codigoDeAcesso(),
+    // E-mail + senha, para o app instalado e para aparelho novo.
+    senhaDeAcesso(),
     // nextCookies precisa ser o ultimo plugin da lista.
     nextCookies(),
   ],
