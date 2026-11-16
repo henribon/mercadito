@@ -418,12 +418,16 @@ export const REPORT_ITEMS = `
    order by pu.purchased_at, pu.id, i.position
 `;
 
-/** Todo mundo que quer o relatorio, com a casa de cada um. */
+/**
+ * Todo mundo que quer o relatorio, com a casa de cada um.
+ *
+ * O destino e o e-mail escolhido na aba Conta; sem escolha, o de login.
+ */
 export const REPORT_RECIPIENTS = `
   select m.household_id,
          h.name  as household_name,
          u.id    as user_id,
-         u.email as email,
+         coalesce(nullif(btrim(m.report_email), ''), u.email) as email,
          coalesce(nullif(btrim(m.display_name), ''), u.name) as name
     from household_members m
     join households h on h.id = m.household_id
@@ -460,5 +464,33 @@ export const REPORT_PREFERENCE = `
 /** $1 = household_id, $2 = user_id, $3 = recebe ou nao */
 export const SET_REPORT_PREFERENCE = `
   update household_members set monthly_report = $3
+   where household_id = $1 and user_id = $2
+`;
+
+/* ---------------------------------------------------------------------------
+ * Configuracoes de conta
+ *
+ * Tudo mora em household_members: sao escolhas de uma pessoa dentro de uma
+ * casa, e as tabelas de autenticacao ficam intocadas.
+ * ------------------------------------------------------------------------- */
+
+/** $1 = household_id, $2 = user_id */
+export const ACCOUNT_SETTINGS = `
+  select m.display_name,
+         m.monthly_report,
+         nullif(btrim(m.report_email), '') as report_email
+    from household_members m
+   where m.household_id = $1 and m.user_id = $2
+`;
+
+/** $1 = household_id, $2 = user_id, $3 = nome (null volta a usar o da conta) */
+export const SET_DISPLAY_NAME = `
+  update household_members set display_name = $3
+   where household_id = $1 and user_id = $2
+`;
+
+/** $1 = household_id, $2 = user_id, $3 = e-mail (null volta a usar o de login) */
+export const SET_REPORT_EMAIL = `
+  update household_members set report_email = $3
    where household_id = $1 and user_id = $2
 `;

@@ -17,6 +17,9 @@ direto do QR Code do cupom fiscal (NFC-e de São Paulo).
   própria senha dentro do app e entra em qualquer aparelho com e-mail + senha.
   Quem entrou uma vez fica conectado: a sessão vale um ano e se renova sozinha.
 - **Entrar com 4 dígitos** — atalho opcional por aparelho, no lugar da senha.
+- **Aba Conta** — cada pessoa ajusta o próprio nome, para qual e-mail o
+  relatório vai, a senha e o código de 4 dígitos, e encontra o código de convite
+  da casa.
 
 Custo zero: o plano gratuito do Neon permite 100 projetos e a Vercel hospeda o
 app de graça.
@@ -89,10 +92,10 @@ npm run dev
 Abra `http://localhost:3000` e peça o link de acesso. **Sem SMTP configurado o
 link aparece no terminal**, o que permite testar tudo antes de mexer com e-mail.
 
-Ao entrar, crie a casa. O código de convite aparece na aba **Produtos**, no fim
-da página — é ele que sua esposa usa para entrar na mesma lista.
+Ao entrar, crie a casa. O código de convite aparece na aba **Conta** — é ele que
+sua esposa usa para entrar na mesma lista.
 
-Ainda na aba **Produtos**, em *Entrar no app*, crie sua **senha**. A partir daí
+Ainda na aba **Conta**, em *Entrar no app*, crie sua **senha**. A partir daí
 a tela de login aceita e-mail + senha em qualquer aparelho — inclusive no app
 instalado na tela inicial, onde o link do e-mail abriria no navegador. Depois de
 entrar, o aparelho fica conectado; a senha só volta a ser pedida se você tocar
@@ -132,9 +135,10 @@ Depois disso é só `git push`: a Vercel builda e publica sozinha.
 
 > **Ao atualizar um app que já está no ar**, rode `npm run db:setup` de novo
 > apontando para o banco de produção sempre que o [`neon/schema.sql`](neon/schema.sql)
-> mudar. A senha (`user_passwords`) e o relatório mensal (`report_deliveries` e a
-> coluna `monthly_report`) dependem disso; sem as tabelas, criar senha e enviar
-> relatório falham.
+> mudar. A senha (`user_passwords`), o relatório mensal (`report_deliveries` e a
+> coluna `monthly_report`) e a aba Conta (coluna `report_email`) dependem disso;
+> sem elas, criar senha, abrir a aba Conta e enviar relatório falham com o aviso
+> de banco desatualizado.
 
 > **Onde as variáveis vivem.** São três lugares com propósitos diferentes:
 > `.env.local` (sua máquina, nunca commitado), **Vercel → Environment Variables**
@@ -175,9 +179,12 @@ Três dias em vez de um porque o envio é idempotente: cada pessoa recebe um
 relatório por mês (tabela `report_deliveries`), então os dias 2 e 3 só completam
 o que tiver falhado no dia 1.
 
-Cada pessoa liga ou desliga o próprio recebimento na aba **Resumo**, em
-*Relatório por e-mail*. O botão **Enviar agora** manda na hora o relatório do
-mês que estiver na tela — é o jeito de ver como ele fica sem esperar a virada.
+Cada pessoa liga ou desliga o próprio recebimento na aba **Conta**, em
+*Relatório por e-mail*, e escolhe ali para qual endereço ele vai — em branco, é
+o e-mail de login. Trocar o destino não muda o e-mail com que se entra no app.
+Na aba **Resumo**, o botão **Enviar agora** manda na hora o relatório do mês que
+estiver na tela, para o mesmo endereço — é o jeito de ver como ele fica sem
+esperar a virada.
 
 Para reenviar um mês pela linha de comando (só chega para quem ainda não
 recebeu):
@@ -245,7 +252,7 @@ A regra está em [`src/lib/access.ts`](src/lib/access.ts):
   criar a casa e gerar o código;
 - qualquer outra pessoa precisa apresentar o código de convite de uma casa.
 
-O código é o mesmo que aparece na aba Produtos: ele autoriza a entrada **e**
+O código é o mesmo que aparece na aba Conta: ele autoriza a entrada **e**
 define em qual casa a pessoa cai. Quem entra com ele é adicionado à casa
 automaticamente, sem passar por tela de onboarding.
 
@@ -254,7 +261,7 @@ impediria ninguém de chamar a API diretamente.
 
 **Entrar sem e-mail, com 4 dígitos.** O magic link é ótimo para a primeira vez e
 péssimo para todo dia: abrir o e-mail no meio do mercado é atrito. Depois de
-entrar uma vez, cada pessoa cria um código de 4 dígitos na aba Produtos.
+entrar uma vez, cada pessoa cria um código de 4 dígitos na aba Conta.
 
 Quatro dígitos são só 10 mil combinações, então o código sozinho não guarda
 nada — quem identifica a pessoa é o **aparelho**. Ao criar o código, o navegador
@@ -447,15 +454,18 @@ src/
     page.tsx              Lista: pendentes, sugestões de reposição, adicionar
     escanear/             Câmera, consulta à SEFAZ e conferência da nota
     historico/            Compras e detalhe de cada nota
-    resumo/               Gasto do mês, mercados, preços, reincidência e relatório por e-mail
-    produtos/             Catálogo, recorrência, código de convite, senha e código de acesso
+    resumo/               Gasto do mês, mercados, preços, reincidência e "enviar agora" do relatório
+    produtos/             Catálogo e recorrência
+    conta/                Nome, destino do relatório, senha, código de acesso, convite e sair
     api/auth/[...all]/    Rotas do Better Auth
     api/cron/relatorio-mensal/  Gatilho do relatório (agendador da Vercel)
     api/nfce/             Proxy autenticado para o portal da SEFAZ
   components/             Provider com polling, tab bar, scanner, ícones, PinInput
+  components/account/     Cartões de senha e de código de 4 dígitos (aba Conta)
   lib/
     actions.ts            Server Actions: toda a camada de dados
     session.ts            Fronteira de segurança (sessão -> casa)
+    account.ts            Regras da aba Conta: nome e e-mail de destino do relatório
     sql.ts                Consultas SQL, compartilhadas com os testes
     db.ts                 Pool do Postgres e conversão de tipos
     auth.ts               Better Auth (magic link + senha + código de 4 dígitos)
@@ -475,5 +485,5 @@ src/
 neon/schema.sql           Tabelas, índices e a view de estatísticas
 scripts/db-setup.mjs      Aplica o schema no banco (npm run db:setup)
 vercel.json               Agendamento do relatório mensal
-tests/                    Parser, normalização, acesso, senha, resumo, relatório e banco (PGlite)
+tests/                    Parser, normalização, acesso, senha, conta, resumo, relatório e banco (PGlite)
 ```

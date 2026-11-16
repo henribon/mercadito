@@ -221,3 +221,13 @@ create table if not exists report_deliveries (
   sent_at      timestamptz not null default now(),
   primary key (household_id, user_id, month)
 );
+
+-- ---------------------------------------------------------------------------
+-- Configuracoes de conta (aba Conta).
+--
+-- report_email e para onde o relatorio desta pessoa vai. Nulo = o e-mail de
+-- login, que continua sendo o unico que abre a porta: trocar o destino do
+-- relatorio nao muda com que e-mail se entra no app.
+-- ---------------------------------------------------------------------------
+alter table household_members
+  add column if not exists report_email text;

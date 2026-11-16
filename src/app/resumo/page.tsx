@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useApp } from "@/components/AppProvider";
@@ -17,7 +18,6 @@ import {
   getReportSettings,
   getSpendInsights,
   sendReportNow,
-  setReportEnabled,
   type ReportSettings,
   type SpendInsights,
 } from "@/lib/actions";
@@ -143,13 +143,13 @@ export default function ResumoPage() {
 /**
  * O relatorio completo, que vai por e-mail.
  *
- * Duas coisas separadas: o envio automatico de todo comeco de mes (que cada
- * pessoa liga ou desliga para si) e o "manda agora", que serve para ver o
- * relatorio de qualquer mes sem esperar a virada.
+ * Aqui fica so o "manda agora", que serve para ver o relatorio de qualquer mes
+ * sem esperar a virada. O envio automatico de todo comeco de mes e o endereco
+ * de destino sao configuracoes da pessoa, e moram na aba Conta.
  */
 function ReportSection({ reference }: { reference: Date }) {
   const [settings, setSettings] = useState<ReportSettings | null>(null);
-  const [busy, setBusy] = useState<"toggle" | "send" | null>(null);
+  const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
@@ -172,24 +172,8 @@ function ReportSection({ reference }: { reference: Date }) {
 
   if (!settings) return null;
 
-  async function toggle() {
-    if (!settings) return;
-    const enabled = !settings.enabled;
-
-    setBusy("toggle");
-    setFeedback(null);
-    try {
-      await setReportEnabled(enabled);
-      setSettings({ ...settings, enabled });
-    } catch {
-      setFeedback({ ok: false, text: "Não consegui salvar. Tente de novo." });
-    } finally {
-      setBusy(null);
-    }
-  }
-
   async function send() {
-    setBusy("send");
+    setBusy(true);
     setFeedback(null);
     try {
       const result = await sendReportNow({
@@ -205,7 +189,7 @@ function ReportSection({ reference }: { reference: Date }) {
     } catch {
       setFeedback({ ok: false, text: "Não consegui enviar. Tente de novo." });
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   }
 
@@ -218,60 +202,38 @@ function ReportSection({ reference }: { reference: Date }) {
       />
 
       <div className="card p-4">
-        <div className="flex items-start gap-3">
-          <div className="min-w-0 flex-1">
-            <p className="text-sm">Receber todo começo de mês</p>
-            <p className="mt-0.5 text-xs text-muted">
-              O fechamento do mês anterior chega em{" "}
-              <span className="break-all text-text">{settings.email}</span>: itens mais
-              caros, no que você mais gastou, onde saiu mais barato e a melhor época
-              para comprar o que se repete.
-            </p>
-          </div>
+        <p className="text-xs text-muted">
+          Itens mais caros, no que você mais gastou, onde saiu mais barato e a melhor
+          época para comprar o que se repete. Vai para{" "}
+          <span className="break-all text-text">{settings.email}</span>.
+        </p>
 
-          <button
-            type="button"
-            role="switch"
-            aria-checked={settings.enabled}
-            aria-label="Receber o relatório todo começo de mês"
-            disabled={busy !== null}
-            onClick={() => void toggle()}
-            className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors
-                        disabled:opacity-40 ${
-                          settings.enabled ? "bg-accent" : "bg-border"
-                        }`}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void send()}
+          className="btn-ghost mt-4 w-full"
+        >
+          {busy && <IconSpinner size={16} />}
+          {busy ? "Enviando" : `Enviar agora o de ${monthName(reference)}`}
+        </button>
+
+        {feedback && (
+          <p
+            role={feedback.ok ? "status" : "alert"}
+            className={`mt-3 text-sm ${feedback.ok ? "text-accent" : "text-danger"}`}
           >
-            <span
-              className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm
-                          transition-transform ${
-                            settings.enabled ? "translate-x-5" : "translate-x-0"
-                          }`}
-            />
-          </button>
-        </div>
+            {feedback.text}
+          </p>
+        )}
 
-        <div className="mt-4 border-t border-border pt-4">
-          <button
-            type="button"
-            disabled={busy !== null}
-            onClick={() => void send()}
-            className="btn-ghost w-full"
-          >
-            {busy === "send" && <IconSpinner size={16} />}
-            {busy === "send"
-              ? "Enviando"
-              : `Enviar agora o de ${monthName(reference)}`}
-          </button>
-
-          {feedback && (
-            <p
-              role={feedback.ok ? "status" : "alert"}
-              className={`mt-3 text-sm ${feedback.ok ? "text-accent" : "text-danger"}`}
-            >
-              {feedback.text}
-            </p>
-          )}
-        </div>
+        <p className="mt-4 border-t border-border pt-3 text-xs text-muted">
+          Envio automático de todo começo de mês:{" "}
+          <span className="text-text">{settings.enabled ? "ligado" : "desligado"}</span>.{" "}
+          <Link href="/conta" className="underline underline-offset-2 hover:text-text">
+            Mudar em Conta
+          </Link>
+        </p>
       </div>
     </section>
   );

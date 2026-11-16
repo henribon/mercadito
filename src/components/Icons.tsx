@@ -144,6 +144,13 @@ export const IconLogout = (p: IconProps) => (
   </Icon>
 );
 
+export const IconUser = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4 21a8 8 0 0 1 16 0" />
+  </Icon>
+);
+
 export const IconCamera = (p: IconProps) => (
   <Icon {...p}>
     <path d="M14.5 4h-5L8 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-4l-1.5-2z" />

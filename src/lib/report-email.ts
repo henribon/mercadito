@@ -529,7 +529,7 @@ export function renderMonthlyReport(
               padding:12px 20px;border-radius:8px;font-size:14px;font-weight:500">Abrir o resumo no app</a>
     <p style="margin:18px 0 0;font-size:12px;line-height:1.5;color:${COLOR.muted}">
       Você recebe este relatório no começo de cada mês, com o fechamento do mês anterior.
-      Para parar de receber, abra a aba Resumo no app e desligue o relatório por e-mail.
+      Para parar de receber, abra a aba Conta no app e desligue o relatório por e-mail.
     </p>
   </td></tr>
 

@@ -134,7 +134,7 @@ export const senhaDeAcesso = () =>
         },
       ),
 
-      /** GET /senha/status — o que a aba Produtos precisa mostrar. */
+      /** GET /senha/status — o que a aba Conta precisa mostrar. */
       statusSenha: createAuthEndpoint(
         "/senha/status",
         { method: "GET", use: [sessionMiddleware] },

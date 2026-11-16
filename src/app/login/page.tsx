@@ -387,7 +387,7 @@ function FormularioEntrada({ aviso }: { aviso: string | null }) {
       {erro}
 
       <p className="mt-3 text-xs text-muted">
-        Você recebe um link e entra com um toque. Lá dentro, na aba Produtos, dá para
+        Você recebe um link e entra com um toque. Lá dentro, na aba Conta, dá para
         criar uma senha ou um código de {PIN_LENGTH} dígitos e não precisar mais do
         e-mail.
       </p>
