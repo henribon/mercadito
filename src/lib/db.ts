@@ -144,6 +144,20 @@ export async function transaction<T>(
   }
 }
 
+/**
+ * O banco esta numa versao mais antiga do schema que o codigo: falta uma tabela
+ * (42P01) ou uma coluna (42703). Acontece quando o deploy chega antes do
+ * `npm run db:setup` — o codigo novo sobe sozinho, o schema nao.
+ */
+export function isSchemaOutdated(cause: unknown): boolean {
+  const code = pgErrorCode(cause);
+  return code === "42P01" || code === "42703";
+}
+
+export const SCHEMA_OUTDATED_MESSAGE =
+  "O banco de dados ainda não foi atualizado para esta versão do app. " +
+  "Rode `npm run db:setup` apontando para o banco de produção e tente de novo.";
+
 /** Codigo de erro do Postgres, quando houver (23505 = unique_violation). */
 export function pgErrorCode(cause: unknown): string | null {
   if (cause && typeof cause === "object" && "code" in cause) {
