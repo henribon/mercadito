@@ -3,7 +3,12 @@ import { APIError, createAuthEndpoint, sessionMiddleware } from "better-auth/api
 import { setSessionCookie } from "better-auth/cookies";
 
 import { PASSWORD_LOCKED } from "./auth-shared";
-import { query, queryOne } from "./db";
+import {
+  isSchemaOutdated,
+  query as rawQuery,
+  queryOne as rawQueryOne,
+  SCHEMA_OUTDATED_MESSAGE,
+} from "./db";
 import {
   decidePasswordLogin,
   hashPassword,
@@ -32,6 +37,31 @@ import {
  * mais uma chave para a mesma porta. Com a regra em password.ts e o SQL em
  * sql.ts, tudo que decide quem entra fica coberto pelos testes.
  */
+
+/**
+ * Tabela da senha ausente = o deploy chegou antes do `npm run db:setup`.
+ *
+ * Sem isto o erro do Postgres vira um 500 sem corpo, e a tela so consegue
+ * dizer "nao consegui falar com o servidor" — que manda a pessoa conferir a
+ * internet, quando o que falta e atualizar o banco.
+ */
+async function comSchema<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (cause) {
+    if (isSchemaOutdated(cause)) {
+      throw new APIError("SERVICE_UNAVAILABLE", {
+        message: SCHEMA_OUTDATED_MESSAGE,
+        code: "BANCO_DESATUALIZADO",
+      });
+    }
+    throw cause;
+  }
+}
+
+const query: typeof rawQuery = (text, params) => comSchema(() => rawQuery(text, params));
+const queryOne: typeof rawQueryOne = (text, params) =>
+  comSchema(() => rawQueryOne(text, params));
 
 type PasswordRow = {
   user_id: string;
