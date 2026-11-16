@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { matchScannedKey } from "@/lib/nfce/copied";
 import { detectSefazError, parseNfceHtml, parseNfcePaste } from "@/lib/nfce/parse";
 import { parseQrContent } from "@/lib/nfce/qr";
 import { currentUser } from "@/lib/session";
@@ -21,6 +22,9 @@ const MAX_PASTE = 500_000;
  * - `paste`: o texto da pagina que o usuario copiou do proprio navegador. Desde
  *   novembro/2026 o portal recusa a maior parte das consultas feitas pelo
  *   servidor, e esse e o caminho que continua funcionando.
+ * - `paste` + `qr`: a pagina copiada depois de um QR Code que a SEFAZ recusou.
+ *   O QR nao e consultado de novo; serve para conferir que a pagina e daquela
+ *   nota e para registrar a chave e o link de origem.
  */
 export async function POST(request: NextRequest) {
   // Rota autenticada: nao queremos um proxy aberto para a internet.
@@ -61,8 +65,33 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Sem sourceUrl: a nota nao veio de uma consulta nossa.
-    return NextResponse.json({ receipt, sourceUrl: null });
+    // A nota colada pode vir junto do QR Code que foi escaneado antes (e que a
+    // SEFAZ recusou): o QR diz de onde ela veio e qual e a chave de verdade.
+    const scanned = typeof body.qr === "string" ? parseQrContent(body.qr) : null;
+
+    if (!scanned?.ok) {
+      // Sem sourceUrl: a nota nao veio de uma consulta nossa.
+      return NextResponse.json({ receipt, sourceUrl: null });
+    }
+
+    if (matchScannedKey(receipt.accessKey, scanned.accessKey) === "different") {
+      return NextResponse.json(
+        {
+          error:
+            "A página copiada é de outra nota — a chave de acesso não bate com a " +
+            "do QR Code que você leu. Abra a nota pelo botão acima e copie de novo.",
+          reason: "paste-mismatch",
+        },
+        { status: 422 },
+      );
+    }
+
+    return NextResponse.json({
+      // A chave do QR e mais confiavel que a achada no texto, e e ela que
+      // impede a mesma nota de entrar duas vezes.
+      receipt: { ...receipt, accessKey: scanned.accessKey },
+      sourceUrl: scanned.consultaUrl,
+    });
   }
 
   const parsed = parseQrContent(body.qr ?? "");
