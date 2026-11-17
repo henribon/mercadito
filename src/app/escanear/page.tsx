@@ -1,7 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ChangeEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import { useApp } from "@/components/AppProvider";
 import { QrScanner } from "@/components/QrScanner";
@@ -23,9 +31,14 @@ import {
   suggestProductName,
 } from "@/lib/normalize";
 import type { NfceReceipt } from "@/lib/nfce/parse";
+import { prefersPhotoCapture, readQrFromPhoto } from "@/lib/qr-camera";
 import type { ProductWithStats } from "@/lib/types";
 
-type Mode = "idle" | "camera" | "loading" | "review" | "saving" | "done";
+/** `photo`: procurando o QR na foto que acabou de chegar da camera. */
+type Mode = "idle" | "camera" | "photo" | "loading" | "review" | "saving" | "done";
+
+/** O aparelho nao muda com a pagina aberta: nao ha o que assinar. */
+const subscribeNever = () => () => {};
 
 type Done = { itemsSaved: number; listItemsCleared: number; purchaseId: string };
 
@@ -62,6 +75,18 @@ export default function EscanearPage() {
   const [done, setDone] = useState<Done | null>(null);
 
   const [aliases, setAliases] = useState<Record<string, string>>({});
+
+  /**
+   * No iPhone o botao principal tira uma foto em vez de abrir a camera ao vivo,
+   * que ali pedia permissao a cada leitura. No servidor nao ha aparelho: a
+   * pagina nasce com a camera ao vivo e se ajusta ao hidratar.
+   */
+  const photoFirst = useSyncExternalStore(
+    subscribeNever,
+    () => prefersPhotoCapture(navigator),
+    () => false,
+  );
+  const photoInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!household) return;
@@ -121,6 +146,49 @@ export default function EscanearPage() {
   );
 
   const consult = useCallback((qr: string) => send({ qr }), [send]);
+
+  /** Uma leitura nova comeca do zero: o aviso e a nota recusada eram da anterior. */
+  function clearPrevious() {
+    setError(null);
+    setErrorLink(null);
+    setBlocked(null);
+    setAwaitingCopy(false);
+  }
+
+  function openLive() {
+    clearPrevious();
+    setMode("camera");
+  }
+
+  /** Abre o app de camera do sistema; a foto volta por `readPhoto`. */
+  function openPhoto() {
+    photoInput.current?.click();
+  }
+
+  async function readPhoto(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const photo = input.files?.[0];
+    // Sem isso, escolher a mesma foto de novo nao dispararia outro `change`.
+    input.value = "";
+    // Fechou a camera sem tirar foto: a tela fica como estava.
+    if (!photo) return;
+
+    clearPrevious();
+    setMode("photo");
+
+    const text = await readQrFromPhoto(photo).catch(() => null);
+
+    if (!text) {
+      setError(
+        "Não achei o QR Code na foto. Tire outra com o QR Code inteiro e nítido, " +
+          "a um palmo do cupom e sem reflexo.",
+      );
+      setMode("idle");
+      return;
+    }
+
+    await consult(text);
+  }
 
   /**
    * Le a pagina da nota direto da area de transferencia.
@@ -268,31 +336,56 @@ export default function EscanearPage() {
         </p>
       </header>
 
+      {/* O app de camera do sistema: devolve a foto sem pedir permissao a
+          pagina. Fica fora da tela, mas montado, para o clique chegar nele. */}
+      <input
+        ref={photoInput}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={(event) => void readPhoto(event)}
+        tabIndex={-1}
+        aria-hidden="true"
+        className="sr-only"
+      />
+
       {mode === "camera" ? (
         <QrScanner onResult={consult} onCancel={() => setMode("idle")} />
-      ) : mode === "loading" ? (
+      ) : mode === "loading" || mode === "photo" ? (
         <div className="card flex flex-col items-center gap-3 px-5 py-14">
           <IconSpinner size={24} className="text-muted" />
-          <p className="text-sm text-muted">Lendo a nota…</p>
+          <p className="text-sm text-muted">
+            {mode === "photo" ? "Procurando o QR Code na foto…" : "Lendo a nota…"}
+          </p>
         </div>
       ) : (
         <>
           <button
             type="button"
-            onClick={() => {
-              setError(null);
-              setErrorLink(null);
-              setBlocked(null);
-              setAwaitingCopy(false);
-              setMode("camera");
-            }}
+            onClick={photoFirst ? openPhoto : openLive}
             // Com uma nota esperando a pagina copiada, o passo seguinte e o do
             // cartao abaixo — a camera vira a acao secundaria.
             className={blocked ? "btn-ghost w-full" : "btn-primary w-full"}
           >
             <IconCamera size={18} />
-            {blocked ? "Escanear outra nota" : "Abrir câmera"}
+            {blocked
+              ? "Escanear outra nota"
+              : photoFirst
+                ? "Fotografar o QR Code"
+                : "Abrir câmera"}
           </button>
+
+          {!blocked && (
+            <button
+              type="button"
+              onClick={photoFirst ? openLive : openPhoto}
+              className="btn-quiet mt-1 w-full"
+            >
+              {photoFirst
+                ? "Ler ao vivo (o iPhone pede permissão da câmera)"
+                : "Tirar uma foto do QR Code"}
+            </button>
+          )}
 
           {blocked && (
             <div className="card mt-4 p-4">
