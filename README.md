@@ -229,6 +229,15 @@ pede permissão para ler a área de transferência; no iPhone a leitura só acon
 com um toque, em **Ler a página copiada**. O campo **Ou cole o conteúdo da
 nota** continua lá para quem preferir colar na mão.
 
+**Nome de cupom, nome de gente.** A nota escreve `QUEIJ MUSSA LACTOVALE` e o
+produto da casa se chama "Queijo Mussarela". O app reconhece palavra cortada
+(`QUEIJ`, `INTEG`), abreviação sem vogais (`QJO`, `FGO`), outra grafia
+(`MUCARELA`) e singular/plural, e ignora marca e tamanho. Quando duas palavras
+batem, o item já vem ligado ao produto; quando é só uma abreviação curta
+(`LING TOSCANA` e "Linguiça"), o produto aparece como primeira sugestão e quem
+confirma é você — `MACA` tanto pode ser maçã quanto o começo de "macarrão", e
+ligar errado mistura o preço de um produto no histórico de outro.
+
 **O app aprende.** Ao confirmar que `LEITE INTEG ITALAC 1L` é o produto
 "Leite integral", esse apelido fica salvo. Na próxima nota do mesmo mercado o
 casamento é automático.
@@ -460,7 +469,9 @@ npm test
 São 197 testes em sete frentes:
 
 - **Parsing e casamento de nomes** — HTML da SEFAZ, números e datas em formato
-  brasileiro, validação da chave de acesso, similaridade de nomes de produto.
+  brasileiro, validação da chave de acesso, similaridade de nomes de produto:
+  as abreviações de cupom que precisam ser reconhecidas e os pares que só se
+  parecem (maçã e macarrão, sal e salsicha) e não podem ser ligados sozinhos.
 - **Portão de acesso** — quem pode pedir um link de entrada: usuário conhecido,
   primeiro acesso de todos, código certo, código errado e código ausente.
 - **Código de 4 dígitos** — o par aparelho + código: hash e conferência, cookie

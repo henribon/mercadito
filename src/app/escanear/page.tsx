@@ -16,7 +16,12 @@ import { getAliases, importPurchase } from "@/lib/actions";
 import type { ItemResolution } from "@/lib/data";
 import { money, quantity, dateTime } from "@/lib/format";
 import { looksLikeNfce } from "@/lib/nfce/copied";
-import { normalizeName, rankMatches, suggestProductName } from "@/lib/normalize";
+import {
+  AUTO_LINK_THRESHOLD,
+  normalizeName,
+  rankMatches,
+  suggestProductName,
+} from "@/lib/normalize";
 import type { NfceReceipt } from "@/lib/nfce/parse";
 import type { ProductWithStats } from "@/lib/types";
 
@@ -32,9 +37,6 @@ type Done = { itemsSaved: number; listItemsCleared: number; purchaseId: string }
  * a mesma nota.
  */
 type Blocked = { qr: string; link: string };
-
-/** Acima disso confiamos no palpite e ja deixamos o item ligado ao produto. */
-const AUTO_LINK_THRESHOLD = 0.72;
 
 export default function EscanearPage() {
   const { household, products, refresh } = useApp();
