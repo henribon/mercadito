@@ -9,7 +9,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "node --test \"tests/**/*.test.ts\"",
-    "db:setup": "node scripts/db-setup.mjs"
+    "db:setup": "node scripts/db-setup.mjs",
+    "nfce:ler": "node scripts/ler-nota.ts"
   },
   "dependencies": {
     "@zxing/browser": "^0.1.5",

@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { matchScannedKey } from "@/lib/nfce/copied";
 import { detectSefazError, parseNfceHtml, parseNfcePaste } from "@/lib/nfce/parse";
+import { fetchPortalPage } from "@/lib/nfce/portal";
 import { parseQrContent } from "@/lib/nfce/qr";
 import { currentUser } from "@/lib/session";
 
@@ -20,8 +21,8 @@ const MAX_PASTE = 500_000;
  * - `qr`: consulta o portal da SEFAZ-SP aqui no servidor, porque o portal nao
  *   envia CORS e o navegador nao conseguiria buscar a pagina direto.
  * - `paste`: o texto da pagina que o usuario copiou do proprio navegador. Desde
- *   novembro/2026 o portal recusa a maior parte das consultas feitas pelo
- *   servidor, e esse e o caminho que continua funcionando.
+ *   novembro/2026 o portal fica atras de um WAF que pode recusar a consulta
+ *   feita pelo servidor, e esse e o caminho que nao depende dele.
  * - `paste` + `qr`: a pagina copiada depois de um QR Code que a SEFAZ recusou.
  *   O QR nao e consultado de novo; serve para conferir que a pagina e daquela
  *   nota e para registrar a chave e o link de origem.
@@ -104,21 +105,10 @@ export async function POST(request: NextRequest) {
 
   let html: string;
   try {
-    const response = await fetch(parsed.consultaUrl, {
-      headers: {
-        // O portal responde diferente (ou nada) sem um UA de navegador.
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-          "(KHTML, like Gecko) Chrome/122.0 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml",
-        "Accept-Language": "pt-BR,pt;q=0.9",
-      },
-      redirect: "follow",
-      cache: "no-store",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
+    // Pedido cru, e nao `fetch`: veja o porque em src/lib/nfce/portal.ts.
+    const response = await fetchPortalPage(parsed.consultaUrl, { timeoutMs: TIMEOUT_MS });
 
-    if (!response.ok) {
+    if (response.status < 200 || response.status >= 300) {
       return NextResponse.json(
         {
           error: `A SEFAZ respondeu ${response.status}. Tente de novo em instantes.`,
@@ -129,13 +119,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Paginas antigas da SEFAZ as vezes vem em ISO-8859-1.
-    const charset =
-      response.headers.get("content-type")?.match(/charset=([^;]+)/i)?.[1]?.trim() ??
-      "utf-8";
-    const buffer = await response.arrayBuffer();
-    html = new TextDecoder(charset.toLowerCase() === "utf-8" ? "utf-8" : "iso-8859-1")
-      .decode(buffer);
+    // Status 200 nao quer dizer que a nota veio: o portal tambem responde 200
+    // quando recusa. Quem decide e o conteudo, logo abaixo (detectSefazError).
+    html = response.html;
   } catch (cause) {
     const timedOut = cause instanceof Error && cause.name === "TimeoutError";
     return NextResponse.json(
