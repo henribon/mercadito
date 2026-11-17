@@ -218,9 +218,9 @@ aparece no quadro. O app consulta a SEFAZ, lista os itens e mostra a qual produt
 cada linha será ligada. Você confere, ajusta o que estiver errado e salva. Tudo
 que estava na lista e apareceu na nota sai da lista automaticamente.
 
-**Quando a SEFAZ recusa a consulta.** Desde novembro/2026 o portal bloqueia boa
-parte das consultas automáticas (veja [Sobre a leitura da nota
-fiscal](#sobre-a-leitura-da-nota-fiscal)). Quando isso acontece o app guarda o
+**Quando a SEFAZ recusa a consulta.** Desde novembro/2026 o portal fica atrás de
+um WAF que pode recusar a consulta feita pelo servidor (veja [Sobre a leitura da
+nota fiscal](#sobre-a-leitura-da-nota-fiscal)). Quando isso acontece o app guarda o
 link do QR Code e mostra o botão **Abrir a nota na SEFAZ** — no navegador ela
 carrega normalmente. Selecione tudo (`Ctrl+A` no desktop, toque longo →
 *Selecionar tudo* no celular), copie e volte para o app: ele lê a página copiada
@@ -368,9 +368,36 @@ campo abaixo do botão.
 ficar atrás de um WAF. Para requisição que não vem de um navegador de verdade
 ele responde **HTTP 200 com uma página de rejeição** de ~250 bytes
 (`Request Rejected` + `support ID`) em vez da nota — ou seja, o status não
-denuncia nada, só o corpo. Na prática a consulta automática feita pelo servidor
-(o que a rota `/api/nfce` faz) falha na maior parte das tentativas, inclusive
-rodando da máquina de casa; não é questão do IP da Vercel.
+denuncia nada, só o corpo.
+
+O que o WAF recusa é o **formato do pedido**, não o IP nem a falta de um
+navegador. Medido da mesma máquina, com a mesma URL e os mesmos três cabeçalhos
+(`User-Agent`, `Accept`, `Accept-Language`):
+
+| Pedido | Resultado |
+| --- | --- |
+| `fetch` do Node, como a rota fazia | recusado: `Request Rejected` em 8 de 8, depois em 1 de 1 |
+| `curl` | resposta de ~25 KB, sem rejeição, em 4 de 4 |
+| `https.get` cru | resposta de 18 a 26 KB, sem rejeição, em 5 de 5 |
+| `https.get` + `Connection: keep-alive` | conexão derrubada |
+| `https.get` + `Accept-Encoding: br, gzip, deflate` | conexão derrubada |
+
+O `fetch` acrescenta sozinho `Connection: keep-alive` e `Accept-Encoding` com
+brotli, e não há como tirá-los. Por isso a rota `/api/nfce` deixou de usar
+`fetch`: [`src/lib/nfce/portal.ts`](src/lib/nfce/portal.ts) faz um `https.get`
+com uma conexão por consulta e só aqueles três cabeçalhos. As medições usaram
+uma chave fictícia, então mostram que o WAF deixou passar, não que uma nota de
+verdade foi lida; e são poucas amostras de um portal que muda sem aviso — se ele voltar a recusar, a rota reconhece a
+página de rejeição e a tela cai no caminho da página copiada, descrito abaixo.
+
+Para saber se o portal está respondendo ao servidor sem abrir o app:
+
+```bash
+npm run nfce:ler -- "https://www.nfce.fazenda.sp.gov.br/qrcode?p=..."
+```
+
+Faz um pedido só, igual ao da rota, e imprime o mercado, o total e os primeiros
+itens — ou o motivo da recusa.
 
 Quando a requisição passa, o portal também mudou de forma: o texto do erro **não
 vem no HTML**. Os `div`s de mensagem chegam vazios e o erro é injetado por
@@ -385,7 +412,7 @@ com link para abrir a nota no navegador (lá a página carrega normal). Antes,
 qualquer um dos dois caía na mensagem genérica "não encontrei itens, talvez o
 layout tenha mudado".
 
-O caminho que continua funcionando é o usuário copiar a página aberta no próprio
+O caminho que não depende do WAF é o usuário copiar a página aberta no próprio
 navegador e colar no app: `POST /api/nfce` aceita `{ paste }` e
 `parseNfcePaste` lê tanto o HTML quanto o texto renderizado. No texto não há
 classes para ancorar, então `parseNfceText` se apoia nos rótulos que o portal
@@ -405,10 +432,12 @@ e o link de origem como numa consulta normal. O navegador não consegue buscar a
 página por conta própria — o portal não envia CORS —, então copiar continua
 sendo um gesto da pessoa.
 
-**Por que não um navegador headless:** o bloqueio é um desafio JavaScript — passar
-por ele é justamente o que o portal decidiu barrar, além de frágil e caro de
-hospedar. Se um dia a leitura de um toque for necessária de volta, o caminho
-limpo é uma API de consulta de NFC-e de terceiro.
+**Até onde a rota vai:** ela faz um pedido HTTP simples e aceita a resposta que
+vier. Não imita navegador além do `User-Agent` que sempre mandou, não guarda
+cookie e não resolve desafio — se o portal passar a exigir isso, contornar é
+justamente o que ele decidiu barrar, além de frágil e caro de hospedar. Nesse
+caso o caminho limpo é a página copiada ou uma API de consulta de NFC-e de
+terceiro.
 
 **Limitação conhecida:** o portal da SEFAZ é uma aplicação ASP.NET antiga e o
 HTML pode mudar sem aviso. O parser em [`src/lib/nfce/parse.ts`](src/lib/nfce/parse.ts)
@@ -492,6 +521,7 @@ src/
     report-email.ts       O relatório em HTML e texto
     report-run.ts         Busca os dados, monta e envia (automático e manual)
     nfce/qr.ts            Interpreta o conteúdo do QR e valida a chave
+    nfce/portal.ts        O pedido ao portal da SEFAZ (https.get cru, não fetch)
     nfce/parse.ts         Extrai itens e totais do HTML ou do texto colado
     nfce/copied.ts        Página copiada após o bloqueio: o que enviar e se é a mesma nota
     normalize.ts          Normalização e similaridade de nomes de produto
@@ -499,6 +529,7 @@ src/
     data.ts               Regras puras: recorrência, sugestões e comparação de preços
 neon/schema.sql           Tabelas, índices e a view de estatísticas
 scripts/db-setup.mjs      Aplica o schema no banco (npm run db:setup)
+scripts/ler-nota.ts       Lê uma nota pelo terminal, como a rota faz (npm run nfce:ler)
 vercel.json               Agendamento do relatório mensal
 tests/                    Parser, normalização, acesso, senha, conta, resumo, relatório e banco (PGlite)
 ```
