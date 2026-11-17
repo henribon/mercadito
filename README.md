@@ -214,8 +214,10 @@ como três coisas diferentes.
 
 **Compraram.** Na aba *Escanear*, aponte a câmera para o QR Code no rodapé do
 cupom — não há botão de capturar, a leitura acontece sozinha assim que o código
-aparece no quadro. O app consulta a SEFAZ, lista os itens e mostra a qual produto
-cada linha será ligada. Você confere, ajusta o que estiver errado e salva. Tudo
+aparece no quadro. No iPhone o botão é **Fotografar o QR Code**: abre a câmera
+do próprio iPhone, você tira a foto e o app lê o QR nela, sem pedir permissão de
+câmera (a leitura ao vivo continua no botão logo abaixo). O app consulta a SEFAZ,
+lista os itens e mostra a qual produto cada linha será ligada. Você confere, ajusta o que estiver errado e salva. Tudo
 que estava na lista e apareceu na nota sai da lista automaticamente.
 
 **Quando a SEFAZ recusa a consulta.** Desde novembro/2026 o portal fica atrás de
@@ -348,6 +350,16 @@ quadro a quadro em vez de esperar meio segundo entre tentativas — assim o cupo
 decodifica só o quadrado que aparece na tela. Está em
 [`src/lib/qr-camera.ts`](src/lib/qr-camera.ts).
 
+**No iPhone, foto em vez de câmera ao vivo.** Todo navegador do iOS é WebKit, e
+o WebKit esquece a permissão da câmera um minuto depois que ela fecha. No app
+instalado na tela de início não há nem a configuração do Safari para liberar de
+vez ([WebKit bug 215884](https://bugs.webkit.org/show_bug.cgi?id=215884)): cada
+leitura virava um pedido de permissão. Por isso, no iPhone, o botão principal é
+um `<input type="file" capture>`, que abre o app de câmera do sistema sem pedir
+nada à página. A foto chega com 4032x3024, foco e resolução da câmera de
+verdade; o ZXing tenta a foto inteira, o quadrado central e a metade central,
+cada vez com mais detalhe, até achar o código.
+
 **O mês começa no celular, não no servidor.** O resumo recebe as datas de início
 e fim já prontas do cliente ([`monthWindow`](src/lib/data.ts)). Se o recorte
 fosse feito no servidor, que roda em UTC, a compra das 22h do dia 31 cairia no
@@ -371,7 +383,7 @@ de 44 dígitos — isso descarta QR borrado ou digitação errada sem gastar uma
 requisição.
 
 Se a câmera não abrir, dá para colar a URL da nota ou a chave de 44 dígitos no
-campo abaixo do botão.
+campo abaixo dos botões.
 
 **Mudança no portal (novembro/2026):** a Consulta Pública por QR Code passou a
 ficar atrás de um WAF. Para requisição que não vem de um navegador de verdade
@@ -486,7 +498,8 @@ São 197 testes em sete frentes:
   com nome de produto hostil escapado no HTML.
 - **Resumo de gastos** — o recorte do mês no fuso local (incluindo a virada do
   ano), a comparação de preço entre mercados e o placar de quem é mais barato.
-  Junto vai a geometria do recorte da câmera.
+  Junto vai a geometria do recorte da câmera e das tentativas de leitura da
+  foto, e a escolha entre foto e câmera ao vivo pelo aparelho.
 - **Banco de dados** — o schema e as consultas de produção rodam contra um
   Postgres real ([PGlite](https://pglite.dev), Postgres compilado para WASM),
   sem precisar de banco remoto. Cobre a matemática do `product_stats`, o índice
@@ -536,7 +549,7 @@ src/
     nfce/parse.ts         Extrai itens e totais do HTML ou do texto colado
     nfce/copied.ts        Página copiada após o bloqueio: o que enviar e se é a mesma nota
     normalize.ts          Normalização e similaridade de nomes de produto
-    qr-camera.ts          Constraints da câmera e leitura do QR (nativo/ZXing)
+    qr-camera.ts          Câmera ao vivo, foto do iPhone e leitura do QR (nativo/ZXing)
     data.ts               Regras puras: recorrência, sugestões e comparação de preços
 neon/schema.sql           Tabelas, índices e a view de estatísticas
 scripts/db-setup.mjs      Aplica o schema no banco (npm run db:setup)

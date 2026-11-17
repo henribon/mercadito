@@ -7,7 +7,12 @@ import {
   monthWindow,
   rankStoresByPrice,
 } from "../src/lib/data.ts";
-import { centerSquare } from "../src/lib/qr-camera.ts";
+import {
+  PHOTO_DECODE_SIZE,
+  centerSquare,
+  photoRegions,
+  prefersPhotoCapture,
+} from "../src/lib/qr-camera.ts";
 import type { StorePrice } from "../src/lib/types.ts";
 
 /**
@@ -201,5 +206,88 @@ describe("recorte da camera", () => {
     assert.equal(centerSquare(0, 0), null);
     assert.equal(centerSquare(640, 0), null);
     assert.equal(centerSquare(Number.NaN, 480), null);
+  });
+});
+
+describe("leitura pela foto", () => {
+  test("foto do iPhone: inteira, quadrado central e metade central, cada vez mais nitida", () => {
+    const regions = photoRegions(4032, 3024);
+
+    assert.deepEqual(regions, [
+      { x: 0, y: 0, width: 4032, height: 3024, outWidth: 1600, outHeight: 1200 },
+      { x: 504, y: 0, width: 3024, height: 3024, outWidth: 1600, outHeight: 1600 },
+      { x: 1260, y: 756, width: 1512, height: 1512, outWidth: 1512, outHeight: 1512 },
+    ]);
+  });
+
+  test("foto em pe recorta no meio da altura", () => {
+    const [, square, half] = photoRegions(3024, 4032);
+
+    assert.deepEqual(square, {
+      x: 0,
+      y: 504,
+      width: 3024,
+      height: 3024,
+      outWidth: 1600,
+      outHeight: 1600,
+    });
+    assert.deepEqual(half, {
+      x: 756,
+      y: 1260,
+      width: 1512,
+      height: 1512,
+      outWidth: 1512,
+      outHeight: 1512,
+    });
+  });
+
+  test("nenhuma tentativa passa do tamanho que o ZXing aguenta", () => {
+    for (const [width, height] of [
+      [4032, 3024],
+      [8064, 6048],
+      [3000, 3000],
+    ]) {
+      for (const region of photoRegions(width, height)) {
+        assert.ok(Math.max(region.outWidth, region.outHeight) <= PHOTO_DECODE_SIZE);
+      }
+    }
+  });
+
+  test("tentativa sem mais detalhe que a anterior fica de fora", () => {
+    // A metade central de 1080 ja seria lida em tamanho real pelo quadrado.
+    assert.equal(photoRegions(1920, 1080).length, 2);
+    // Foto pequena: a inteira ja chega sem encolher.
+    assert.deepEqual(photoRegions(1000, 800), [
+      { x: 0, y: 0, width: 1000, height: 800, outWidth: 1000, outHeight: 800 },
+    ]);
+  });
+
+  test("imagem sem medidas nao gera tentativa", () => {
+    assert.deepEqual(photoRegions(0, 0), []);
+    assert.deepEqual(photoRegions(Number.NaN, 3024), []);
+  });
+
+  test("iPhone, iPad e iPadOS fingindo ser Mac vao pela foto", () => {
+    const iphone =
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148";
+    const ipad =
+      "Mozilla/5.0 (iPad; CPU OS 16_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1";
+    const ipadOs =
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15";
+
+    assert.equal(prefersPhotoCapture({ userAgent: iphone, maxTouchPoints: 5 }), true);
+    assert.equal(prefersPhotoCapture({ userAgent: ipad, maxTouchPoints: 5 }), true);
+    assert.equal(prefersPhotoCapture({ userAgent: ipadOs, maxTouchPoints: 5 }), true);
+  });
+
+  test("Android e Mac de verdade seguem na camera ao vivo", () => {
+    const android =
+      "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36";
+    const mac =
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15";
+
+    assert.equal(prefersPhotoCapture({ userAgent: android, maxTouchPoints: 5 }), false);
+    assert.equal(prefersPhotoCapture({ userAgent: mac, maxTouchPoints: 0 }), false);
+    assert.equal(prefersPhotoCapture({ userAgent: mac }), false);
   });
 });
